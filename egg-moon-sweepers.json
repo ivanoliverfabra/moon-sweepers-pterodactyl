@@ -10,7 +10,7 @@
   "description": "Unofficial CPU-only Moon Sweepers server adapter using Wine and Steam P2P relay. Requires user-supplied game files.",
   "features": [],
   "docker_images": {
-    "GHCR - Moon Sweepers": "ghcr.io/ivanoliverfabra/moonsweepers-dedicated:latest"
+    "GHCR - Moon Sweepers": "ghcr.io/ivanoliverfabra/moon-sweepers-pterodactyl:latest"
   },
   "file_denylist": [],
   "startup": "python3 /opt/moon/ptero/supervisor.py",
@@ -29,7 +29,7 @@
   "scripts": {
     "installation": {
       "script": "#!/bin/bash\nset -euo pipefail\nbash /opt/moon/ptero/install.sh\n",
-      "container": "ghcr.io/ivanoliverfabra/moonsweepers-dedicated:latest",
+      "container": "ghcr.io/ivanoliverfabra/moon-sweepers-pterodactyl:latest",
       "entrypoint": "bash"
     }
   },
