@@ -15,15 +15,9 @@
   "file_denylist": [],
   "startup": "python3 /opt/moon/ptero/supervisor.py",
   "config": {
-    "files": {},
-    "startup": {
-      "done": "Moon Sweepers server starting.",
-      "userInteraction": []
-    },
-    "logs": {
-      "custom": false,
-      "location": ""
-    },
+    "files": "{}",
+    "startup": "{\n    \"done\": \"Moon Sweepers server starting.\",\n    \"userInteraction\": []\n}",
+    "logs": "{\n    \"custom\": false,\n    \"location\": \"logs/latest.log\"\n}",
     "stop": "^C"
   },
   "scripts": {

@@ -7,6 +7,7 @@ Unofficial experimental adapter. This is **not** an official Moon Sweepers dedic
 - `egg-moon-sweepers.json`: import into the Pterodactyl/Calagopus panel.
 - `Dockerfile`: builds a GHCR image with the upstream Wine runtime and native client/server module.
 - `ptero/install.sh`: egg install script; creates persistent directories.
+- `ptero/entrypoint.sh`: image entrypoint Wings/Calagopus runs; maps the panel's unmapped uid/gid to a name (nss_wrapper) and expands the egg's `STARTUP`.
 - `ptero/supervisor.py`: console command bridge and signal forwarding.
 - `.github/workflows/publish.yml`: publishes `ghcr.io/<owner>/<repo>:latest`.
 
@@ -76,3 +77,8 @@ Backups are stored in `/home/container/backups/`. Download them with SFTP or the
 - The server uses Steam relay networking; no inbound allocation or IP:port join is provided.
 - The SteamID can change after restart. Run `status` again and update each client's connection setting.
 - Revalidate after every game update. Do not overwrite an existing unrelated `version.dll` on client PCs.
+
+## Troubleshooting
+
+- `groups: cannot find name for group ID 988` followed by nothing: the image was started without a Pterodactyl-style entrypoint, so the daemon's unmapped uid/gid dropped into an interactive `bash`. Rebuild and pull the current image (`ENTRYPOINT ["/usr/bin/tini", "--"]`, `CMD ["/entrypoint.sh"]`), then reinstall/restart. If the Calagopus node caches images, pull `:latest` again.
+- The console should print `container@moon-sweepers~ python3 /opt/moon/ptero/supervisor.py` right after "Server marked as Starting...". If it does not, the node is running an old image.

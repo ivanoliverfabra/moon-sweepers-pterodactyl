@@ -32,7 +32,7 @@ RUN mkdir -p /native \
 FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl python3 tini procps tar gzip \
+    ca-certificates curl python3 tini procps tar gzip tzdata libnss-wrapper \
     lib32gcc-s1 lib32stdc++6 lib32z1 wine64 wine xvfb xauth x11-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /home/container/game-source /opt/moon/bin /opt/moon/mod \
@@ -49,10 +49,16 @@ COPY --from=build /out/version.dll /opt/moon/mod/version.dll
 COPY --from=build /out/MinHook-LICENSE.txt /opt/moon/mod/MinHook-LICENSE.txt
 COPY ptero/supervisor.py /opt/moon/ptero/supervisor.py
 COPY ptero/install.sh /opt/moon/ptero/install.sh
+COPY ptero/entrypoint.sh /entrypoint.sh
 RUN chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
               /opt/moon/bin/server-import /opt/moon/ptero/install.sh \
+              /entrypoint.sh \
     && chmod 644 /opt/moon/ptero/supervisor.py
-ENV WINEARCH=win64 \
+# No USER directive: Wings starts the server as its own uid:gid, and the
+# install container must stay root to write into /mnt/server.
+ENV HOME=/home/container \
+    USER=container \
+    WINEARCH=win64 \
     WINEPREFIX=/data/wineprefix \
     WINEDEBUG=-all \
     DISPLAY=:99 \
@@ -67,7 +73,10 @@ ENV WINEARCH=win64 \
     MOON_BACKUP_KEEP=10 \
     WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b"
 WORKDIR /home/container
-ENTRYPOINT []
-CMD ["bash"]
+# Wings does not pass a command: it relies on the image's ENTRYPOINT/CMD to run
+# the egg's STARTUP. tini (without -g) reaps Wine's child processes and forwards
+# signals only to the supervisor, which handles the graceful save/stop itself.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]
 LABEL org.opencontainers.image.title="Moon Sweepers Pterodactyl runtime" \
       org.opencontainers.image.description="Unofficial Moon Sweepers CPU-only server runtime for Pterodactyl"
