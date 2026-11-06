@@ -1,0 +1,108 @@
+{
+  "_comment": "Moon Sweepers unofficial Pterodactyl egg.",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-11-06T00:00:00+00:00",
+  "name": "Moon Sweepers",
+  "author": "Fabra",
+  "description": "Unofficial CPU-only Moon Sweepers server adapter using Wine and Steam P2P relay. Requires user-supplied game files.",
+  "features": [],
+  "docker_images": {
+    "ghcr.io/OWNER/REPOSITORY:latest": "GHCR - Moon Sweepers"
+  },
+  "file_denylist": [],
+  "startup": "python3 /opt/moon/ptero/supervisor.py",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Moon Sweepers runner started",
+      "userInteraction": []
+    },
+    "logs": {
+      "custom": false,
+      "location": "logs/moon-host.log"
+    },
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/bash\nset -euo pipefail\nbash /opt/moon/ptero/install.sh\n",
+      "container": "ghcr.io/ivanoliverfabra/moonsweepers-dedicated:latest",
+      "entrypoint": "bash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Server Password",
+      "description": "Shared join password. 8-128 printable ASCII characters. Never use your Steam password.",
+      "env_variable": "MOON_SERVER_PASSWORD",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|min:8|max:128",
+      "field_type": "text"
+    },
+    {
+      "name": "Allowed Player SteamID64s",
+      "description": "Optional additional allowlist: 1-15 distinct numeric player SteamID64s separated by commas. Leave empty to allow any licensed player with the password.",
+      "env_variable": "MOON_ALLOWED_STEAM_IDS",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string",
+      "field_type": "text"
+    },
+    {
+      "name": "Save Slot",
+      "description": "Moon Sweepers save slot, from 1 to 5.",
+      "env_variable": "MOON_SLOT",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:5",
+      "field_type": "text"
+    },
+    {
+      "name": "GameServer API Game Port",
+      "description": "Internal Steam GameServer API setting. Not a public Pterodactyl allocation; joining uses SteamID/P2P relay.",
+      "env_variable": "MOON_GAME_PORT",
+      "default_value": "27025",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1024|max:65535",
+      "field_type": "text"
+    },
+    {
+      "name": "GameServer API Query Port",
+      "description": "Internal Steam GameServer API setting; must differ from game port. Not a public allocation.",
+      "env_variable": "MOON_QUERY_PORT",
+      "default_value": "27026",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1024|max:65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Backup Retention",
+      "description": "Number of confirmed graceful-shutdown backups to retain (1-100).",
+      "env_variable": "MOON_BACKUP_KEEP",
+      "default_value": "10",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:100",
+      "field_type": "text"
+    },
+    {
+      "name": "Timezone",
+      "description": "Timezone used for timestamps, e.g. America/New_York or UTC.",
+      "env_variable": "TZ",
+      "default_value": "UTC",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64",
+      "field_type": "text"
+    }
+  ]
+}
