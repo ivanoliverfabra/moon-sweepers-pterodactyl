@@ -6,7 +6,7 @@ This project uses an experimental server adapter based on the upstream Moon Swee
 
 ## Requirements
 
-- Either a licensed retail copy of Moon Sweepers, or an online-fix patched copy for SpaceWar mode.
+- Either a licensed retail copy of Moon Sweepers, or an online-fix patched copy for SpaceWar mode. Online-fix files are **not** provided by this repository (see the disclaimer below) — you supply your own game files.
 - Windows PC with Steam installed.
 - Moon Sweepers version **1.0.5** (Steam build `26317497`).
 - The matching client module.
@@ -91,8 +91,18 @@ the host removes the stale online-fix files and restores the retail Steam API DL
 
 In SpaceWar mode the server skips the Moon Sweepers ownership check because
 SpaceWar is free and online-fix clients do not own the retail game. The join
-password and optional SteamID allowlist still apply. The online-fix crack is
-third-party software; use it only with game files you are entitled to run.
+password and optional SteamID allowlist still apply.
+
+> **Disclaimer (educational purposes only):** The online-fix / SpaceWar mode in
+> this repository exists for educational and research purposes only — it
+> demonstrates how this server adapter interacts with the Steamworks API and
+> how the host detects and syncs an alternative game file set. It is not
+> intended to enable piracy, and it must not be used to play Moon Sweepers
+> without owning it. **This repository does not provide, host, or link
+> directly to any crack or online-fix files.** The file names are referenced
+> for compatibility only; you must supply your own legally obtained game
+> files and assume full responsibility for how you use them. If you do not
+> own Moon Sweepers, buy a licensed copy and use retail mode instead.
 
 ## Important Information
 
