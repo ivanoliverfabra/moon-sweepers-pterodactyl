@@ -11,6 +11,11 @@ RUN git init /src \
     && git -C /src remote add origin https://github.com/hexonMD/moon-sweepers-dedicated-server.git \
     && git -C /src fetch --depth 1 origin "${UPSTREAM_REF}" \
     && git -C /src checkout --detach FETCH_HEAD
+# Make the Steam AppId/GameId runtime-configurable (5335510 retail, 480
+# SpaceWar for online-fix clients) instead of hardcoding the retail AppId.
+COPY ptero/patches/spacewar.patch /tmp/spacewar.patch
+RUN git -C /src apply --check /tmp/spacewar.patch \
+    && git -C /src apply /tmp/spacewar.patch
 RUN mkdir -p /out \
     && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
        -Wno-cast-function-type -static-libgcc \
@@ -48,12 +53,15 @@ COPY --from=build /out/steam-probe.exe /opt/moon/bin/steam-probe.exe
 COPY --from=build /out/version.dll /opt/moon/mod/version.dll
 COPY --from=build /out/MinHook-LICENSE.txt /opt/moon/mod/MinHook-LICENSE.txt
 COPY ptero/supervisor.py /opt/moon/ptero/supervisor.py
+COPY ptero/sync-game.py /opt/moon/ptero/sync-game.py
 COPY ptero/install.sh /opt/moon/ptero/install.sh
 COPY ptero/entrypoint.sh /entrypoint.sh
-RUN chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
+RUN sed -i 's/\r$//' /entrypoint.sh /opt/moon/ptero/install.sh \
+              /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py \
+    && chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
               /opt/moon/bin/server-import /opt/moon/ptero/install.sh \
               /entrypoint.sh \
-    && chmod 644 /opt/moon/ptero/supervisor.py
+    && chmod 644 /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py
 # No USER directive: Wings starts the server as its own uid:gid, and the
 # install container must stay root to write into /mnt/server.
 ENV HOME=/home/container \
@@ -71,7 +79,7 @@ ENV HOME=/home/container \
     MOON_GAME_PORT=27025 \
     MOON_QUERY_PORT=27026 \
     MOON_BACKUP_KEEP=10 \
-    WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b;winealsa.drv=d"
+    WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b;winmm=n,b;winealsa.drv=d"
 WORKDIR /home/container
 # Wings does not pass a command: it relies on the image's ENTRYPOINT/CMD to run
 # the egg's STARTUP. tini (without -g) reaps Wine's child processes and forwards

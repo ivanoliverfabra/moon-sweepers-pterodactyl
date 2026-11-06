@@ -1,98 +1,104 @@
-# Moon Sweepers — Pterodactyl / Calagopus
+# Moon Sweepers — Community Server
 
-Unofficial experimental adapter. This is **not** an official Moon Sweepers dedicated server. The upstream project currently targets Moon Sweepers 1.0.5 / Steam build 26317497 and checks the exact GameAssembly hash and IL2CPP metadata version. Check the upstream README before updating or deploying.
+An unofficial community-hosted Moon Sweepers server.
 
-## What is included
+This project uses an experimental server adapter based on the upstream Moon Sweepers project. It is not affiliated with or supported by the game developers.
 
-- `egg-moon-sweepers.json`: import into the Pterodactyl/Calagopus panel.
-- `Dockerfile`: builds a GHCR image with the upstream Wine runtime and native client/server module.
-- `ptero/install.sh`: egg install script; creates persistent directories.
-- `ptero/entrypoint.sh`: image entrypoint Wings/Calagopus runs; maps the panel's unmapped uid/gid to a name (nss_wrapper) and expands the egg's `STARTUP`.
-- `ptero/supervisor.py`: console command bridge and signal forwarding.
-- `.github/workflows/publish.yml`: publishes `ghcr.io/<owner>/<repo>:latest`.
+## Requirements
 
-The Docker build fetches upstream source at commit `5132f8a5e755da84b3eb62279f32c951badf972d`, and pins MinHook. It does not bundle Moon Sweepers game files.
+- Either a licensed retail copy of Moon Sweepers, or an online-fix patched copy for SpaceWar mode.
+- Windows PC with Steam installed.
+- Moon Sweepers version **1.0.5** (Steam build `26317497`).
+- The matching client module.
 
-## 1. Publish the image
+## Connecting to the Server
 
-1. Create a GitHub repository and upload this bundle's contents.
-2. Ensure GitHub Actions is enabled and the workflow has package write permission.
-3. Push to `main` or run the workflow manually.
-4. In GitHub Packages, make the resulting container package public (or configure private-registry credentials on the Calagopus node).
-5. The egg JSON uses `ghcr.io/OWNER/REPOSITORY:latest`. Replace that placeholder with your actual lowercase GHCR image path before importing.
+### 1. Install the Client Module
 
-The image is `linux/amd64`. The build compiles the upstream `version.dll` and Steam probe and installs Wine/Xvfb/runtime dependencies.
-
-## 2. Import the egg
-
-In the panel's Admin area, import `egg-moon-sweepers.json`. Edit its Docker image entry to your published GHCR path if needed. Create a server using this egg.
-
-No game ports need to be allocated. This adapter joins through Steam P2P/relay and does not implement direct IP:port joining. The game/query port variables configure the Steam GameServer API internally only.
-
-## 3. Upload the owned game files
-
-After the server is created, use SFTP or the panel file manager to upload the **contents** of your own Windows Steam installation into:
-
-`/home/container/game-source/`
-
-The folder should directly contain at least:
-
-- `MoonSweepers.exe`
-- `GameAssembly.dll`
-- `UnityPlayer.dll`
-- `MoonSweepers_Data/`
-
-Do not place the files one directory deeper (for example `game-source/Moon Sweepers/MoonSweepers.exe`). The upstream importer also checks other required game files and exact build metadata.
-
-Supported upstream build: Moon Sweepers 1.0.5 / Steam build 26317497. The importer rejects incompatible builds rather than silently running an incompatible native module.
-
-## 4. Configure variables
-
-- `MOON_SERVER_PASSWORD`: required, 8–128 printable ASCII characters.
-- `MOON_ALLOWED_STEAM_IDS`: optional comma-separated player SteamID64 allowlist (1–15 distinct IDs).
-- `MOON_SLOT`: save slot 1–5.
-- `MOON_GAME_PORT`, `MOON_QUERY_PORT`: distinct values 1024–65535; internal Steam API settings, not public allocations.
-- `MOON_BACKUP_KEEP`: 1–100 confirmed shutdown backups; default 10.
-- `TZ`: timezone for logs/backup timestamps.
-
-Players still need their own licensed Steam accounts and the matching client module. The server ID is anonymous and may change after a restart.
-
-## 5. Console and shutdown
-
-The Pterodactyl console supports:
-
-- `status` — prints native state and current `server_steam_id`.
-- `save` — queues an in-game save; inspect status/logs for completion.
-- `stop` — requests graceful shutdown.
-- `help`
-
-Use the panel Stop button. The egg sends Ctrl-C (`SIGINT`) to the supervisor, which forwards it to the upstream runner. The runner requests a native save/quit, waits up to 110 seconds, and creates a backup only if the final save is confirmed. Configure the Wings/Pterodactyl stop grace period to **at least 150 seconds** (180 seconds recommended) so Wings does not force-kill the container before the upstream save/backup finishes.
-
-Backups are stored in `/home/container/backups/`. Download them with SFTP or the panel file manager. The complete persistent state (imported game, Wine prefix, logs, control files and backups) lives under `/home/container`. Do not reinstall with a wipe/delete-data option if you need the world.
-
-## Important limitations
-
-- Experimental, unofficial and not developer-supported.
-- The upstream project documents a successful single licensed client join and world save, but two simultaneous players have not been verified.
-- The server uses Steam relay networking; no inbound allocation or IP:port join is provided.
-- The SteamID can change after restart. Run `status` again and update each client's connection setting.
-- Revalidate after every game update. Do not overwrite an existing unrelated `version.dll` on client PCs.
-
-## Joining from Windows (one script)
-
-`client/install-moon-client.ps1` downloads only what the client needs from the upstream release (`install-client.ps1`, `launch-client.ps1` and `version.dll`), checks them against the release's own `SHA256SUMS`, runs upstream's installer, and deletes the download. The default release tag matches the upstream commit this image is built from.
+From a clone of this repository, open PowerShell and run:
 
 ```powershell
-# from a clone of this repo
-.\client\install-moon-client.ps1 -ServerId 90296897008781313 -Launch
-
-# or in one line (read the script first; this runs remote code)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ivanoliverfabra/moon-sweepers-pterodactyl/main/client/install-moon-client.ps1))) -ServerId 90296897008781313 -Launch
+.\client\install-moon-client.ps1 -ServerId SERVER_ID -Launch
 ```
 
-Use the `server_steam_id` from the console's `status` command. It changes after every server restart; rerun with `-Action Shortcut -ServerId NEW_ID` to update the desktop shortcut. The game folder is found automatically from your Steam libraries, or pass `-GamePath`. If the download URL is wrong, download the release ZIP yourself and pass `-ZipPath`. Players need a licensed Steam copy of Moon Sweepers 1.0.5.
+Alternatively, run the installer directly from GitHub:
 
-## Troubleshooting
+```powershell
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/ivanoliverfabra/moon-sweepers-pterodactyl/main/client/install-moon-client.ps1"))) -ServerId SERVER_ID -Launch
+```
 
-- `groups: cannot find name for group ID 988` followed by nothing: the image was started without a Pterodactyl-style entrypoint, so the daemon's unmapped uid/gid dropped into an interactive `bash`. Rebuild and pull the current image (`ENTRYPOINT ["/usr/bin/tini", "--"]`, `CMD ["/entrypoint.sh"]`), then reinstall/restart. If the Calagopus node caches images, pull `:latest` again.
-- The console should print `container@moon-sweepers~ python3 /opt/moon/ptero/supervisor.py` right after "Server marked as Starting...". If it does not, the node is running an old image.
+The installer downloads the required client files from the upstream release:
+
+- `install-client.ps1`
+- `launch-client.ps1`
+- `version.dll`
+
+It verifies the downloads against the release's `SHA256SUMS`, runs the upstream installer, and removes the downloaded files afterward.
+
+**Security note:** Review the script before executing it remotely.
+
+### 2. Obtain the Server ID
+
+The server uses Steam P2P/relay networking rather than direct IP:port connections.
+
+Obtain the current `server_steam_id` from the server administrator.
+
+Use that ID when running the client installer.
+
+### 3. Launch the Game
+
+The installer can launch the game automatically using `-Launch`.
+
+For the retail game, the desktop shortcut starts the game through Steam with the
+matching AppId. For an online-fix client, launch `MoonSweepers.exe` directly with
+`-moon-connect SERVER_ID` instead; keep `OnlineFix64.dll`, `winmm.dll`,
+`SteamOverlay64.dll` and `OnlineFix.ini` beside the executable. The retail Steam
+`-applaunch` shortcut is not used in SpaceWar mode.
+
+You can also update an existing desktop shortcut without reinstalling the client module:
+
+```powershell
+.\client\install-moon-client.ps1 -Action Shortcut -ServerId SERVER_ID
+```
+
+### Updating the Server ID
+
+The server ID may change whenever the server restarts.
+
+If you can no longer connect:
+
+1. Obtain the latest server ID from the administrator.
+2. Update your desktop shortcut using `-Action Shortcut`.
+3. Launch the game again.
+
+## Retail vs online-fix (SpaceWar) mode
+
+The server container supports both game variants. The host detects the uploaded
+files on every start and keeps the imported game in sync with them.
+
+| Uploaded server game | `SteamAppId` | `SteamGameId` | Players |
+| --- | --- | --- | --- |
+| Clean retail install | `5335510` | `5335510` | Licensed retail game |
+| Online-fix patched install | `480` | `480` | Online-fix client using SpaceWar |
+
+For an online-fix server, upload the whole patched game folder to
+`game-source/`, including `OnlineFix.ini`, `OnlineFix64.dll`,
+`SteamOverlay64.dll`, `winmm.dll`, `dlllist.txt` and the patched
+`MoonSweepers_Data/Plugins/x86_64/steam_api64.dll`. Set both `SteamAppId` and
+`SteamGameId` to `480` in the panel and restart. The host copies those files into
+the imported game automatically. When switching back to a clean retail upload,
+the host removes the stale online-fix files and restores the retail Steam API DLL.
+
+In SpaceWar mode the server skips the Moon Sweepers ownership check because
+SpaceWar is free and online-fix clients do not own the retail game. The join
+password and optional SteamID allowlist still apply. The online-fix crack is
+third-party software; use it only with game files you are entitled to run.
+
+## Important Information
+
+- Retail players must own a licensed Steam copy of Moon Sweepers. Online-fix/SpaceWar players use their patched client instead.
+- The client must use the supported game version: **1.0.5**.
+- The matching client module is required.
+- Direct IP:port connections are not supported.
+- Server availability depends on the community-hosted server.
+- This is an unofficial, experimental project and is not endorsed by the game developers.
