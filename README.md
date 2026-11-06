@@ -78,6 +78,20 @@ Backups are stored in `/home/container/backups/`. Download them with SFTP or the
 - The SteamID can change after restart. Run `status` again and update each client's connection setting.
 - Revalidate after every game update. Do not overwrite an existing unrelated `version.dll` on client PCs.
 
+## Joining from Windows (one script)
+
+`client/install-moon-client.ps1` downloads only what the client needs from the upstream release (`install-client.ps1`, `launch-client.ps1` and `version.dll`), checks them against the release's own `SHA256SUMS`, runs upstream's installer, and deletes the download. The default release tag matches the upstream commit this image is built from.
+
+```powershell
+# from a clone of this repo
+.\client\install-moon-client.ps1 -ServerId 90296897008781313 -Launch
+
+# or in one line (read the script first; this runs remote code)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ivanoliverfabra/moon-sweepers-pterodactyl/main/client/install-moon-client.ps1))) -ServerId 90296897008781313 -Launch
+```
+
+Use the `server_steam_id` from the console's `status` command. It changes after every server restart; rerun with `-Action Shortcut -ServerId NEW_ID` to update the desktop shortcut. The game folder is found automatically from your Steam libraries, or pass `-GamePath`. If the download URL is wrong, download the release ZIP yourself and pass `-ZipPath`. Players need a licensed Steam copy of Moon Sweepers 1.0.5.
+
 ## Troubleshooting
 
 - `groups: cannot find name for group ID 988` followed by nothing: the image was started without a Pterodactyl-style entrypoint, so the daemon's unmapped uid/gid dropped into an interactive `bash`. Rebuild and pull the current image (`ENTRYPOINT ["/usr/bin/tini", "--"]`, `CMD ["/entrypoint.sh"]`), then reinstall/restart. If the Calagopus node caches images, pull `:latest` again.
