@@ -17,12 +17,12 @@
   "config": {
     "files": {},
     "startup": {
-      "done": "Moon Sweepers runner started",
+      "done": "Moon Sweepers server starting.",
       "userInteraction": []
     },
     "logs": {
       "custom": false,
-      "location": "logs/moon-host.log"
+      "location": ""
     },
     "stop": "^C"
   },
