@@ -71,7 +71,7 @@ ENV HOME=/home/container \
     MOON_GAME_PORT=27025 \
     MOON_QUERY_PORT=27026 \
     MOON_BACKUP_KEEP=10 \
-    WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b"
+    WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b;winealsa.drv=d"
 WORKDIR /home/container
 # Wings does not pass a command: it relies on the image's ENTRYPOINT/CMD to run
 # the egg's STARTUP. tini (without -g) reaps Wine's child processes and forwards

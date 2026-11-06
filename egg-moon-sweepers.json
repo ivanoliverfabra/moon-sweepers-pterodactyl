@@ -16,7 +16,7 @@
   "startup": "python3 /opt/moon/ptero/supervisor.py",
   "config": {
     "files": "{}",
-    "startup": "{\n    \"done\": \"Moon Sweepers server starting.\",\n    \"userInteraction\": []\n}",
+    "startup": "{\n    \"done\": \"world-bound\",\n    \"userInteraction\": []\n}",
     "logs": "{\n    \"custom\": false,\n    \"location\": \"logs/latest.log\"\n}",
     "stop": "^C"
   },
