@@ -40,6 +40,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl python3 tini procps tar gzip tzdata libnss-wrapper \
     lib32gcc-s1 lib32stdc++6 lib32z1 wine64 wine xvfb xauth x11-utils \
     && rm -rf /var/lib/apt/lists/*
+# Unity 6000.6 host does not boot under Ubuntu's Wine 9.0 (the 64-bit host
+# either access-violates during import resolution or hangs before opening a
+# window). Use the current WineHQ stable build, which boots the game and was
+# verified end to end, including an anonymous SpaceWar login and a client join.
+RUN mkdir -pm755 /etc/apt/keyrings /etc/apt/sources.list.d \
+    && curl -fsSL https://dl.winehq.org/wine-builds/winehq.key \
+        -o /etc/apt/keyrings/winehq-archive.key \
+    && curl -fsSL \
+        https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources \
+        -o /etc/apt/sources.list.d/winehq.sources \
+    && dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends winehq-stable \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /home/container/game-source /opt/moon/bin /opt/moon/mod \
              /opt/moon/ptero /import \
     && ln -s /home/container /data \
@@ -79,7 +93,7 @@ ENV HOME=/home/container \
     MOON_GAME_PORT=27025 \
     MOON_QUERY_PORT=27026 \
     MOON_BACKUP_KEEP=10 \
-    WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b;winmm=n,b;winealsa.drv=d"
+    WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b;winmm=b;winealsa.drv=d"
 WORKDIR /home/container
 # Wings does not pass a command: it relies on the image's ENTRYPOINT/CMD to run
 # the egg's STARTUP. tini (without -g) reaps Wine's child processes and forwards

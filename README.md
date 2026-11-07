@@ -111,4 +111,5 @@ password and optional SteamID allowlist still apply.
 - The matching client module is required.
 - Direct IP:port connections are not supported.
 - Server availability depends on the community-hosted server.
+- The host runs the game under Wine **10 or newer** (WineHQ, bundled in the image); Unity 6000.6 does not boot under Wine 9.
 - This is an unofficial, experimental project and is not endorsed by the game developers.
