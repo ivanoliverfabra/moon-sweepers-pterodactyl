@@ -109,6 +109,36 @@
       "field_type": "text"
     },
     {
+      "name": "Server Icon URL",
+      "description": "URL of a hosted 1:1 (square) icon image for this server. Exposed by the ID API: included in GET / as \"icon\" and GET /icon redirects to it. Leave empty for none.",
+      "env_variable": "MOON_ICON",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:1024",
+      "field_type": "text"
+    },
+    {
+      "name": "Server Banner URL",
+      "description": "URL of a hosted 16:9 banner image for this server. Exposed by the ID API: included in GET / as \"banner\" and GET /banner redirects to it. Leave empty for none.",
+      "env_variable": "MOON_BANNER",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:1024",
+      "field_type": "text"
+    },
+    {
+      "name": "Server MOTD",
+      "description": "Message of the day for this server. Exposed by the ID API: included in GET / as \"motd\" and served as plain text on GET /motd. Leave empty for none.",
+      "env_variable": "MOON_MOTD",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:1024",
+      "field_type": "text"
+    },
+    {
       "name": "Backup Retention",
       "description": "Number of confirmed graceful-shutdown backups to retain (1-100).",
       "env_variable": "MOON_BACKUP_KEEP",

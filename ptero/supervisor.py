@@ -20,6 +20,19 @@ HEARTBEAT_FRESH_SECONDS = 15
 child = None
 stopping = False
 
+def server_metadata():
+    """Host-configured identity: icon/banner URLs and the message of the day.
+
+    The icon should be a 1:1 (square) image and the banner a 16:9 image; both
+    must already be hosted somewhere public, so the API only hands out their
+    URLs instead of fetching them itself.
+    """
+    return {
+        "icon": os.environ.get("MOON_ICON", "").strip() or None,
+        "banner": os.environ.get("MOON_BANNER", "").strip() or None,
+        "motd": os.environ.get("MOON_MOTD", "").strip() or None,
+    }
+
 def host_state():
     """Read the runner's state file, flagging heartbeat staleness."""
     try:
@@ -34,6 +47,7 @@ def host_state():
     else:
         state["heartbeat_age_seconds"] = None
         state["heartbeat_fresh"] = False
+    state.update(server_metadata())
     return state
 
 class IdApiHandler(BaseHTTPRequestHandler):
@@ -57,6 +71,26 @@ class IdApiHandler(BaseHTTPRequestHandler):
                 state["error"] = "server_steam_id not available yet"
                 self._send(503, "application/json",
                            json.dumps(state, indent=2).encode())
+        elif path in ("/icon", "/banner"):
+            url = host_state().get(path[1:])
+            if url:
+                self.send_response(302)
+                self.send_header("Location", url)
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            else:
+                self._send(
+                    404, "application/json",
+                    json.dumps({"error": f"{path[1:]} not configured"}).encode(),
+                )
+        elif path == "/motd":
+            motd = host_state().get("motd")
+            if motd:
+                self._send(200, "text/plain", motd.encode())
+            else:
+                self._send(404, "application/json",
+                           json.dumps({"error": "motd not configured"}).encode())
         elif path == "/health":
             self._send(200, "text/plain", b"ok")
         else:
@@ -78,6 +112,11 @@ def start_id_api():
     if os.environ.get("MOON_ID_API_ENABLED", "1").strip().lower() in ("0", "false", "no"):
         return None
     port = int(os.environ.get("MOON_GAME_PORT", "27025"))
+    for name, variable in (("icon", "MOON_ICON"), ("banner", "MOON_BANNER")):
+        url = server_metadata()[name]
+        if url and not url.lower().startswith(("http://", "https://")):
+            print(f"Warning: {variable} should point to a hosted http(s) image URL; ignoring {url!r}.", flush=True)
+            os.environ[variable] = ""
     try:
         server = ThreadingHTTPServer(("0.0.0.0", port), IdApiHandler)
     except OSError as error:
@@ -93,7 +132,7 @@ def start_id_api():
     thread.start()
     print(
         f"ID API listening on TCP {port}: GET / (state JSON), GET /id "
-        "(server_steam_id), GET /health",
+        "(server_steam_id), GET /health, GET /icon, GET /banner, GET /motd",
         flush=True,
     )
     return server

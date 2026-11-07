@@ -43,6 +43,11 @@ The server uses Steam P2P/relay networking rather than direct IP:port connection
 
 Obtain the current `server_steam_id` from the server administrator.
 
+If the host keeps the **ID API** enabled (on by default), the current ID is also
+available at `http://SERVER_ADDRESS:GAME_PORT/id` (plain text), where
+`SERVER_ADDRESS:GAME_PORT` is the Pterodactyl allocation your client normally
+connects through. See [ID API](#id-api) for all endpoints.
+
 Use that ID when running the client installer.
 
 ### 3. Launch the Game
@@ -103,6 +108,52 @@ password and optional SteamID allowlist still apply.
 > for compatibility only; you must supply your own legally obtained game
 > files and assume full responsibility for how you use them. If you do not
 > own Moon Sweepers, buy a licensed copy and use retail mode instead.
+
+## ID API
+
+The game itself only listens on the UDP side of the game port, so the host also
+serves a small HTTP API on the **TCP side of the primary game port**
+(`http://SERVER_ADDRESS:GAME_PORT/`). Disable it by setting the `ID API`
+variable to `0`.
+
+| Endpoint | Response |
+| --- | --- |
+| `GET /` | Full server state JSON (same data as the console `status` command) plus heartbeat freshness. |
+| `GET /id` | The current `server_steam_id` as plain text. Returns `503` with an error JSON until the server finishes booting. |
+| `GET /health` | `ok`, for uptime checks. |
+| `GET /icon` | `302` redirect to the hosted icon URL, when the **Server Icon URL** variable is set. |
+| `GET /banner` | `302` redirect to the hosted banner URL, when the **Server Banner URL** variable is set. |
+| `GET /motd` | The message of the day as plain text, when the **Server MOTD** variable is set. |
+
+Server identity variables (all optional, all exposed in `GET /`):
+
+| Variable | Purpose |
+| --- | --- |
+| `MOON_ICON` | URL of a hosted **1:1 (square) icon** image, e.g. `https://example.com/icon.png`. Served as `icon` in `GET /` and via `GET /icon`. |
+| `MOON_BANNER` | URL of a hosted **16:9 banner** image, e.g. `https://example.com/banner.png`. Served as `banner` in `GET /` and via `GET /banner`. |
+| `MOON_MOTD` | Free-text message of the day, e.g. `Welcome to our moon base!`. Served as `motd` in `GET /` and as plain text on `GET /motd`. |
+
+The API never fetches the images itself — point the variables at URLs already
+hosted somewhere public (an image host, GitHub, a CDN, or another Pterodactyl
+allocation). Unconfigured variables come back as `null` in `GET /`, and their
+dedicated endpoints return `404`. The icon/banner URLs are validated to be
+`http(s)://` links at startup and are ignored (with a console warning)
+otherwise.
+
+Example `GET /` response:
+
+```json
+{
+  "ready": true,
+  "phase": "world-bound",
+  "server_steam_id": "90296903580028958",
+  "heartbeat_age_seconds": 0.2,
+  "heartbeat_fresh": true,
+  "icon": "https://example.com/icon.png",
+  "banner": "https://example.com/banner.png",
+  "motd": "Welcome to Fabra's moon base!"
+}
+```
 
 ## Important Information
 
