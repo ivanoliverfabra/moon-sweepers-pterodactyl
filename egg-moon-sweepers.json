@@ -99,6 +99,16 @@
       "field_type": "text"
     },
     {
+      "name": "ID API",
+      "description": "Host a small HTTP endpoint on the primary game port (TCP) exposing the changing server ID: http://SERVER_ADDRESS:GAME_PORT/ for full state JSON, /id for the plain-text server_steam_id, /health for uptime. 1 = on, 0 = off.",
+      "env_variable": "MOON_ID_API_ENABLED",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:0,1",
+      "field_type": "text"
+    },
+    {
       "name": "Backup Retention",
       "description": "Number of confirmed graceful-shutdown backups to retain (1-100).",
       "env_variable": "MOON_BACKUP_KEEP",

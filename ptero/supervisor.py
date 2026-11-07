@@ -6,13 +6,97 @@ import signal
 import subprocess
 import sys
 import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ENTRYPOINT = "/opt/moon/bin/entrypoint"
 IMPORTER = "/opt/moon/bin/server-import"
 SYNC_GAME = "/opt/moon/ptero/sync-game.py"
+STATE_PATH = Path("/data/logs/moon-host-state.json")
+# The runner rewrites the state file on every game heartbeat, so a stale
+# heartbeat means the host process is wedged even though the file still exists.
+HEARTBEAT_FRESH_SECONDS = 15
 child = None
 stopping = False
+
+def host_state():
+    """Read the runner's state file, flagging heartbeat staleness."""
+    try:
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        state = {"ready": False, "phase": "no-state"}
+    heartbeat_ms = state.get("heartbeat_unix_ms")
+    if isinstance(heartbeat_ms, (int, float)):
+        age = max(0.0, time.time() * 1000 - heartbeat_ms) / 1000
+        state["heartbeat_age_seconds"] = round(age, 1)
+        state["heartbeat_fresh"] = age <= HEARTBEAT_FRESH_SECONDS
+    else:
+        state["heartbeat_age_seconds"] = None
+        state["heartbeat_fresh"] = False
+    return state
+
+class IdApiHandler(BaseHTTPRequestHandler):
+    """Quiet HTTP endpoint exposing the host state and changing server ID.
+
+    The game talks Steam P2P over UDP only, so the TCP side of the primary
+    game port stays free; Wings already publishes it externally.
+    """
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path == "/":
+            self._send(200, "application/json",
+                       json.dumps(host_state(), indent=2).encode())
+        elif path == "/id":
+            state = host_state()
+            steam_id = state.get("server_steam_id")
+            if steam_id:
+                self._send(200, "text/plain", str(steam_id).encode())
+            else:
+                state["error"] = "server_steam_id not available yet"
+                self._send(503, "application/json",
+                           json.dumps(state, indent=2).encode())
+        elif path == "/health":
+            self._send(200, "text/plain", b"ok")
+        else:
+            self._send(404, "text/plain", b"not found")
+
+    def _send(self, code, content_type, body):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass
+
+def start_id_api():
+    """Serve the ID API on the primary game port (TCP) when enabled."""
+    if os.environ.get("MOON_ID_API_ENABLED", "1").strip().lower() in ("0", "false", "no"):
+        return None
+    port = int(os.environ.get("MOON_GAME_PORT", "27025"))
+    try:
+        server = ThreadingHTTPServer(("0.0.0.0", port), IdApiHandler)
+    except OSError as error:
+        print(f"ID API disabled: could not bind TCP {port}: {error}", flush=True)
+        return None
+    server.daemon_threads = True
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.5},
+        name="moon-id-api",
+        daemon=True,
+    )
+    thread.start()
+    print(
+        f"ID API listening on TCP {port}: GET / (state JSON), GET /id "
+        "(server_steam_id), GET /health",
+        flush=True,
+    )
+    return server
 
 def run_control(action):
     result = subprocess.run(
@@ -131,6 +215,8 @@ def main():
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
+
+    id_api = start_id_api()
 
     code = prepare_game()
     if stopping:
