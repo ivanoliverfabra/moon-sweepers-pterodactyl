@@ -77,13 +77,16 @@ COPY ptero/supervisor.py /opt/moon/ptero/supervisor.py
 COPY ptero/mods.py /opt/moon/ptero/mods.py
 COPY ptero/modpm.py /opt/moon/ptero/modpm.py
 COPY ptero/game_download.py /opt/moon/ptero/game_download.py
+COPY ptero/modpack.py /opt/moon/ptero/modpack.py
+COPY ptero/versions.py /opt/moon/ptero/versions.py
 COPY ptero/layout.sh /opt/moon/ptero/layout.sh
 COPY ptero/sync-game.py /opt/moon/ptero/sync-game.py
 COPY ptero/install.sh /opt/moon/ptero/install.sh
 COPY ptero/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh /opt/moon/ptero/install.sh \
               /opt/moon/ptero/supervisor.py /opt/moon/ptero/mods.py /opt/moon/ptero/modpm.py /opt/moon/ptero/sync-game.py \
-              /opt/moon/ptero/game_download.py /opt/moon/ptero/layout.sh \
+              /opt/moon/ptero/game_download.py /opt/moon/ptero/modpack.py /opt/moon/ptero/versions.py \
+              /opt/moon/ptero/layout.sh \
               /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
               /opt/moon/bin/server-import /opt/moon/bin/bepinex-setup \
     && chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
@@ -91,7 +94,9 @@ RUN sed -i 's/\r$//' /entrypoint.sh /opt/moon/ptero/install.sh \
               /opt/moon/ptero/install.sh /opt/moon/ptero/layout.sh \
               /entrypoint.sh \
     && chmod 644 /opt/moon/ptero/supervisor.py /opt/moon/ptero/mods.py /opt/moon/ptero/modpm.py /opt/moon/ptero/sync-game.py \
-              /opt/moon/ptero/game_download.py
+              /opt/moon/ptero/game_download.py /opt/moon/ptero/modpack.py /opt/moon/ptero/versions.py
+# Every module the supervisor imports must be in the image: fail the build here, not the server's start.
+RUN cd /opt/moon/ptero && python3 -c "import game_download, modpack, modpm, mods, versions"
 # No USER directive: Wings starts the server as its own uid:gid, and the
 # install container must stay root to write into /mnt/server.
 ENV HOME=/home/container/.runtime/home \
