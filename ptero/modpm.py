@@ -323,7 +323,12 @@ def run(line):
         elif sub == "list":
             say(mods.describe(_port()))
         elif sub == "install" and args:
-            install(_https(args[0], "download link"), " ".join(args[1:]) or None)
+            url = _https(args[0], "download link")
+            if mods.NEXUS_PAGE.match(url):
+                raise ValueError(
+                    "Nexus Mods only gives files to a signed-in browser. Download the zip there, unzip it into "
+                    "mods/plugins (and mods/patchers), then run: mod adopt, and mod link <name> " + url)
+            install(url, " ".join(args[1:]) or None)
         elif sub == "update" and args:
             with _lock:
                 entry = _find(_load(), " ".join(args))
@@ -341,8 +346,13 @@ def run(line):
             name = _set(" ".join(args[:-1]), "link", _https(args[-1], "page link"))
             say(f"Players are sent to {args[-1]} to get {name}.")
         elif sub == "url" and len(args) >= 2:
-            name = _set(" ".join(args[:-1]), "url", _https(args[-1], "download link"))
-            say(f"The launcher downloads {name} from {args[-1]}.")
+            target = _https(args[-1], "download link")
+            if mods.NEXUS_PAGE.match(target):
+                name = _set(" ".join(args[:-1]), "link", target)
+                say(f"That's a Nexus Mods page, so players are sent there to download {name} (saved as its link).")
+            else:
+                name = _set(" ".join(args[:-1]), "url", target)
+                say(f"The launcher downloads {name} from {target}.")
         elif sub == "nexus" and len(args) >= 2:
             numbers = [a for a in args if a.isdigit()]
             words_only = [a for a in args if not a.isdigit()]

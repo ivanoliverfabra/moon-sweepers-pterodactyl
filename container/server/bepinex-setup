@@ -58,11 +58,25 @@ fi
 # Everything BepInEx ships is replaced on each start, so image updates take effect; the operator's folders are
 # linked in (Wine sees Unix symlinks as ordinary folders).
 cp -a "$prepared/base/winhttp.dll" "$prepared/base/doorstop_config.ini" "$prepared/base/.doorstop_version" "$game/"
-rm -rf "$game/dotnet" "$game/BepInEx/core" "$game/BepInEx/interop"
+rm -rf "$game/dotnet" "$game/BepInEx/core"
 mkdir -p "$game/BepInEx"
 cp -a "$prepared/base/dotnet" "$game/dotnet"
 cp -a "$prepared/base/BepInEx/core" "$game/BepInEx/core"
-cp -a "$interop" "$game/BepInEx/interop"
+
+# Interop assemblies. MoonSweepers.ModEngine (a preloader patcher most mods depend on) generates its own, with fixes
+# the mods are built against, and rebuilds them itself when the game changes; once it has, they're left alone.
+# Otherwise ours go in, only when they're missing or for another game build.
+installed="$game/BepInEx/interop"
+if [[ -f "$installed/modengine-stamp.txt" ]] && find -L "$mods/patchers" -iname '*ModEngine*.dll' -type f | grep -q .; then
+    echo "Using the interop assemblies MoonSweepers.ModEngine generated."
+elif [[ "$(cat "$installed/.moon-interop" 2>/dev/null)" != "$hash" ]]; then
+    rm -rf "$installed"
+    cp -a "$interop" "$installed"
+    echo "$hash" >"$installed/.moon-interop"
+    if find -L "$mods/patchers" -iname '*ModEngine*.dll' -type f | grep -q .; then
+        echo "MoonSweepers.ModEngine will rebuild the interop assemblies on this start; restart the server once afterwards."
+    fi
+fi
 for name in plugins patchers config; do
     rm -rf "${game:?}/BepInEx/$name"
     ln -s "$mods/$name" "$game/BepInEx/$name"

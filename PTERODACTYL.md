@@ -85,6 +85,11 @@ described in `modding/README.md`. Mods are off by default. To turn them on:
 
 These folders are kept outside the game folder, so a re-import does not remove them.
 
+Most community mods use **MoonSweepers.ModEngine** (a patcher in `mods/patchers`), which builds its own interop
+assemblies. The server keeps them once ModEngine has built them. The first start after adding ModEngine (or after a
+game update) prints `restart the game once`: restart the server one more time so the mods run against ModEngine's
+assemblies.
+
 The console shows BepInEx's plugin loading, warnings and errors, prefixed with `BepInEx:`. The full log is
 `/home/container/game/BepInEx/LogOutput.log`.
 

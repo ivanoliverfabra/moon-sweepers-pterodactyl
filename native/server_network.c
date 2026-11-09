@@ -580,8 +580,12 @@ static void __cdecl log_callback(Object *text,Object *stack,int type,bool main_t
  if(mode!=MODE_SERVER||(type!=0&&type!=1&&type!=2&&type!=4))return;
  if(InterlockedCompareExchange(&log_busy,1,0)!=0)return;
  char message[LOG_TEXT],where[160];wide_line(text,message,sizeof(message),LOG_TEXT);wide_line(stack,where,sizeof(where),150);
- /* BepInEx checks its own Unity log hook with this error at startup. */
- if(strncmp(message,"Test call after applying unity logging hook",43)==0){InterlockedExchange(&log_busy,0);return;}
+ /* BepInEx checks its own Unity log hook with this error at startup, and a server without graphics (-nographics)
+    can't draw: shaders have no passes, there is no instancing and visual textures are never created. None of that
+    affects the simulation, so it stays out of the console. */
+ if(strncmp(message,"Test call after applying unity logging hook",43)==0||strstr(message,"has only 0 valid passes")||
+    strstr(message,"Instancing is not supported")||strstr(message,"Graphics.CopyTexture called with null")||
+    strstr(where,"UploadVisualSnapshot")||strstr(where,"MoonDustPrints:Draw")){InterlockedExchange(&log_busy,0);return;}
  uint32_t hash=2166136261u;for(const unsigned char *c=(const unsigned char *)message;*c;c++)hash=(hash^*c)*16777619u;
  ULONGLONG now=GetTickCount64();unsigned slot=LOG_KINDS;
  for(unsigned i=0;i<log_kinds;i++)if(log_seen[i].hash==hash){slot=i;break;}

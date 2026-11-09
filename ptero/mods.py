@@ -34,6 +34,8 @@ PATCHERS_DIR = MODS_DIR / "patchers"
 MANIFEST_PATH = MODS_DIR / "mods.json"
 # Nexus Mods game domain: https://www.nexusmods.com/games/moonsweepers
 NEXUS_GAME = "moonsweepers"
+NEXUS_PAGE = re.compile(r"^https?://(www\.)?nexusmods\.com/", re.I)
+NEXUS_MOD_PAGE = re.compile(rf"^https?://(?:www\.)?nexusmods\.com/{NEXUS_GAME}/mods/(\d+)", re.I)
 MAX_MODS = 64
 MAX_FILES = 256
 
@@ -133,6 +135,15 @@ def _entry(raw, index, claimed, errors):
     if link and not link.lower().startswith("https://"):
         errors.append(f"{where}: link must start with https://")
         link = None
+    # A Nexus Mods page is not a download (Nexus only hands files to a signed-in browser): send players there.
+    if url and NEXUS_PAGE.match(url):
+        link = link or url
+        page = NEXUS_MOD_PAGE.match(url)
+        if nexus is None and page:
+            mod_id = int(page.group(1))
+            nexus = {"game": NEXUS_GAME, "mod_id": mod_id,
+                     "page": f"https://www.nexusmods.com/{NEXUS_GAME}/mods/{mod_id}"}
+        url = None
 
     found, missing = {"files": [], "patchers": []}, []
     for key, label, folder in _folders():
