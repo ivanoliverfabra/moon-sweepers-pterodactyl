@@ -136,6 +136,13 @@ mods you installed yourself are left alone. If the API can't be reached, the ser
 `mod pack` installs the pack again without a restart (restart afterwards so BepInEx loads it); `mod pack status`
 shows which revision is installed.
 
+A pack can also pin the **game version** (one of the API's game archives) and the **client version** (a client module
+release such as `v0.2.2`). The server installs the pinned game: when `game-source` came from an earlier API download of
+another version, it downloads the pinned one, swaps it in once it has been checked, and imports it again (saves are
+kept). Game files you uploaded by hand are never replaced; the console says which version the pack wants instead. A
+failed download keeps the old game. Players' launchers ask them to install exactly the pinned game and client before
+they can join.
+
 Each mod in a pack is for everyone, players only (`client`: listed for launchers but not run on the server), or the
 server only (`server`: run here, not offered to players). Players' launchers see the pack in `/mods` and download its
 mods from the registry with their own sign-in. Mods that come from the pack can't be changed with the `mod` commands

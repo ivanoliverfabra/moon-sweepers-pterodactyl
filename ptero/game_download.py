@@ -1,8 +1,12 @@
-"""Installs the game from the Moon Sweepers API when game-source is empty.
+"""Installs the game from the Moon Sweepers API when game-source is empty, or when the modpack needs another version.
 
 Set the egg's Game API URL (MOON_GAME_API_URL) and Server Key (MOON_SERVER_KEY, the API's SERVER_KEY). The server then
 asks the API for its file list, downloads the game archive, checks it, and unpacks it into game-source, so nothing has to
 be uploaded by hand. The key is only ever sent to the API itself, never to the download host it redirects to.
+
+A modpack can name the game archive it needs. When game-source came from an earlier download of another archive, that
+one is downloaded and swapped in (the old files stay until the new download has been checked), and the runner imports
+it again. Game files uploaded by hand are never replaced: the server says what the pack wants instead.
 """
 import hashlib
 import json
@@ -17,6 +21,10 @@ from pathlib import Path, PurePosixPath
 
 REQUIRED = ("MoonSweepers.exe", "GameAssembly.dll", "UnityPlayer.dll", "MoonSweepers_Data")
 WORK = Path("/data")
+# What the last download put in game-source: {"name", "sha256", "installed_at"}.
+RECORD = "game-download.json"
+# The runner's imported copy of game-source; removed after a version change so it imports the new one.
+IMPORTED = "game"
 MAX_ARCHIVE = 20 * 1024 * 1024 * 1024
 
 
@@ -50,13 +58,25 @@ def _api(base, path, key):
         raise RuntimeError(f"the API answered HTTP {error.code}") from None
 
 
-def _pick(files):
-    wanted = os.environ.get("MOON_GAME_FILE", "").strip()
+def installed():
+    """The archive the last download put in game-source, or None (never downloaded, or uploaded by hand)."""
+    try:
+        record = json.loads((WORK / RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) and isinstance(record.get("name"), str) else None
+
+
+def _pick(files, required=None):
+    chosen = os.environ.get("MOON_GAME_FILE", "").strip()
+    if required and chosen and chosen != required:
+        say(f"The modpack needs {required}, so that's installed instead of {chosen} (MOON_GAME_FILE).")
+    wanted = required or chosen
     if wanted:
         for entry in files:
             if entry.get("name") == wanted:
                 return entry
-        raise RuntimeError(f"the API doesn't list {wanted} (MOON_GAME_FILE)")
+        raise RuntimeError(f"the API doesn't list {wanted} ({'the modpack' if required else 'MOON_GAME_FILE'})")
     zips = [e for e in files if str(e.get("name", "")).lower().endswith(".zip")]
     if not zips:
         raise RuntimeError("the API lists no .zip game archive")
@@ -89,8 +109,9 @@ def _download(url, target, size, sha256):
         raise RuntimeError("the download doesn't match its SHA-256; try again")
 
 
-def _unpack(archive, source):
-    """Unpacks into a staging folder next to game-source, then moves the game's own folder contents in."""
+def _unpack(archive, source, replace=False):
+    """Unpacks into a staging folder next to game-source, then moves the game's own folder contents in. `replace`
+    empties game-source first, so files the old version had and the new one doesn't don't linger."""
     staging = WORK / "game-download-staging"
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
@@ -105,6 +126,12 @@ def _unpack(archive, source):
     if not roots:
         raise RuntimeError("the archive doesn't contain MoonSweepers.exe")
     root = min(roots, key=lambda path: len(path.parts))
+    if replace and source.is_dir():
+        for item in source.iterdir():
+            if item.is_dir() and not item.is_symlink():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
     source.mkdir(parents=True, exist_ok=True)
     for item in root.iterdir():
         target = source / item.name
@@ -116,10 +143,20 @@ def _unpack(archive, source):
     shutil.rmtree(staging, ignore_errors=True)
 
 
-def install(source):
-    """Downloads and unpacks the game into `source` when it's missing. Returns True when the game is there after."""
+def install(source, required=None):
+    """Downloads and unpacks the game into `source` when it's missing, or when `required` (the game archive a modpack
+    needs) differs from the one downloaded last. Returns True when a game is there after."""
+    replace = False
     if present(source):
-        return True
+        record = installed()
+        if not required or (record and record["name"] == required):
+            return True
+        if not record:
+            say(f"The modpack needs {required}, but game-source was uploaded by hand, so it's left as it is. "
+                f"Empty game-source to let the server download {required}.")
+            return True
+        say(f"The modpack needs {required}; game-source has {record['name']}. Downloading {required}.")
+        replace = True
     base = os.environ.get("MOON_GAME_API_URL", "").strip().rstrip("/")
     key = os.environ.get("MOON_SERVER_KEY", "").strip()
     if not base or not key:
@@ -132,10 +169,11 @@ def install(source):
 
     archive = WORK / "game-download.zip"
     try:
-        say(f"The game isn't in game-source yet; getting it from {base}.")
+        if not replace:
+            say(f"The game isn't in game-source yet; getting it from {base}.")
         with _api(base, "/server/manifest.json", key) as response:
             files = json.loads(response.read().decode("utf-8")).get("files") or []
-        entry = _pick(files)
+        entry = _pick(files, required)
         name, size, sha256 = entry["name"], entry.get("size"), entry.get("sha256")
         link = urllib.parse.urlparse(str(entry.get("url", "")))
         if (link.scheme, link.netloc) != (parsed.scheme, parsed.netloc):
@@ -153,13 +191,17 @@ def install(source):
         WORK.mkdir(parents=True, exist_ok=True)
         _download(location, archive, size, sha256)
         say("Unpacking the game into game-source...")
-        _unpack(archive, source)
-        (WORK / "game-download.json").write_text(json.dumps(
+        _unpack(archive, source, replace)
+        if replace:
+            # The runner only imports game-source when it has no imported copy.
+            shutil.rmtree(WORK / IMPORTED, ignore_errors=True)
+        (WORK / RECORD).write_text(json.dumps(
             {"name": name, "sha256": sha256, "installed_at": int(time.time())}, indent=2) + "\n")
         say(f"Installed {name} into game-source.")
         return present(source)
     except (RuntimeError, OSError, ValueError, zipfile.BadZipFile, urllib.error.URLError) as error:
         say(f"Couldn't install the game from the API: {error}")
-        return False
+        # A failed version change keeps the old game: the server still starts.
+        return present(source)
     finally:
         archive.unlink(missing_ok=True)

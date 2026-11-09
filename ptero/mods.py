@@ -300,7 +300,8 @@ def manifest(game_port):
         "enabled": enabled(),
         "game": NEXUS_GAME,
         "hash": digest.hexdigest(),
-        # The modpack this server installs (MOON_MODPACK), when it uses one: {token, name, revision}.
+        # The modpack this server installs (MOON_MODPACK), when it uses one: {token, name, revision, game, client},
+        # where game ({name, size, sha256}) and client (a release tag) are what players must run, or null for any.
         "modpack": raw.get("pack") if isinstance(raw, dict) and isinstance(raw.get("pack"), dict) else None,
         "mods": mods,
         "server_only": server_only,
@@ -445,6 +446,9 @@ def describe(game_port):
     if full["modpack"]:
         pack = full["modpack"]
         lines.append(f"Modpack: {pack.get('name')} ({pack.get('token')}) revision {pack.get('revision')}.")
+        game = (pack.get("game") or {}).get("name")
+        if game or pack.get("client"):
+            lines.append(f"Players need game {game or 'any'} and client {pack.get('client') or 'any'}.")
     if not full["mods"]:
         lines.append("No mods are listed in /home/container/mods/mods.json.")
     for mod in full["mods"]:

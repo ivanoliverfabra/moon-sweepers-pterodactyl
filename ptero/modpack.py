@@ -135,20 +135,47 @@ def _remove_entry(data, entry):
     data["mods"].remove(entry)
 
 
-def sync():
-    """Brings mods/ in line with the modpack. Never raises: a failed sync leaves the last good install in place."""
+_FETCH = object()
+
+
+def resolve():
+    """The modpack Modpack Token names, as the API resolves it, or None when there's no token or it couldn't be
+    fetched (the reason is printed). Fetched before the game is installed, since the pack can name the game version."""
+    token = _token()
+    if not token:
+        return None
+    try:
+        if not TOKEN.match(token):
+            raise RuntimeError(f"Modpack Token {token!r} should look like K7QX3MP or K7QX3MP@3")
+        base, key = _api()
+        return _fetch_pack(base, key, token)
+    except Exception as error:  # the server should still start with what it had
+        say(f"Couldn't get the modpack: {str(error).rstrip('.')}. Starting with what's already installed.")
+        return None
+
+
+def required_game(pack):
+    """The game archive the pack needs, or None for any."""
+    game = (pack or {}).get("game")
+    return game.get("name") if isinstance(game, dict) and isinstance(game.get("name"), str) else None
+
+
+def sync(pack=_FETCH):
+    """Brings mods/ in line with the modpack (`pack` from resolve(), fetched now if not given). Never raises: a failed
+    sync leaves the last good install in place."""
     token = _token()
     try:
         if not token:
             _forget_pack()
             return
-        if not TOKEN.match(token):
-            raise RuntimeError(f"Modpack Token {token!r} should look like K7QX3MP or K7QX3MP@3")
+        if pack is _FETCH:
+            pack = resolve()
+        if pack is None:
+            return
         if not mods.enabled():
-            say("Modpack Token is set but BepInEx mods are off (Enable BepInEx Mods = 0); not installing it.")
+            say("Modpack Token is set but BepInEx mods are off (Enable BepInEx Mods = 0); not installing its mods.")
             return
         base, key = _api()
-        pack = _fetch_pack(base, key, token)
         _apply(base, key, pack)
     except Exception as error:  # the server should still start with what it had
         say(f"Couldn't install the modpack: {str(error).rstrip('.')}. Starting with the mods already installed.")
@@ -222,7 +249,14 @@ def _apply(base, key, pack):
         for entry in gone:
             _remove_entry(data, entry)
             say(f"Removed {entry['name']}: the modpack no longer lists it.")
-        data["pack"] = {"token": pack["token"], "name": pack["name"], "revision": pack["revision"]}
+        data["pack"] = {
+            "token": pack["token"],
+            "name": pack["name"],
+            "revision": pack["revision"],
+            # What players must run; launchers install exactly these before joining.
+            "game": pack.get("game"),
+            "client": pack.get("client"),
+        }
         modpm._save(data)
 
     if changed or gone:
@@ -257,4 +291,6 @@ def status():
         return "No modpack (Modpack Token is empty)."
     if not pack:
         return f"Modpack Token is {token}, but it hasn't been installed yet. Run: mod pack"
-    return f"Modpack {pack['name']} ({pack['token']}) revision {pack['revision']}. Token setting: {token}."
+    game = (pack.get("game") or {}).get("name") or "any"
+    return (f"Modpack {pack['name']} ({pack['token']}) revision {pack['revision']}. Token setting: {token}. "
+            f"Game: {game}. Client: {pack.get('client') or 'any'}.")

@@ -320,8 +320,11 @@ def console():
 def main():
     global child
     game = Path("/home/container/game-source")
-    # With Game API URL and Server Key set, an empty game-source is filled from the API.
-    game_download.install(game)
+    # The modpack can name the game version, so it's asked for first.
+    pack = modpack.resolve()
+    # With Game API URL and Server Key set, an empty game-source is filled from the API (or switched to the
+    # modpack's game version, when the last download was another one).
+    game_download.install(game, modpack.required_game(pack))
     missing = [name for name in game_download.REQUIRED if not (game / name).exists()]
     if missing:
         print("The game isn't installed. Either set Game API URL and Server Key so the server downloads it, or "
@@ -329,7 +332,7 @@ def main():
         print("Missing from game-source: " + ", ".join(missing), flush=True)
         return 1
     # With a Modpack Token set, install that pack's mods before BepInEx sees the mods folder.
-    modpack.sync()
+    modpack.sync(pack)
 
     os.environ.setdefault("WINEARCH", "win64")
     os.environ.setdefault("WINEPREFIX", "/data/wineprefix")
