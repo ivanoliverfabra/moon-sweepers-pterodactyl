@@ -26,11 +26,23 @@ RUN cd /native \
        -Wl,--no-insert-timestamp -o /out/version.dll \
     && cp LICENSE.txt /out/MinHook-LICENSE.txt
 
+# BepInEx 6 with the Unity 6000.6 fixes (modding/README.md). The interop assemblies need the imported
+# GameAssembly.dll, so only the game-independent parts are built here; container/server/bepinex-setup
+# generates the rest on the first start with MOON_BEPINEX=1.
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS bepinex
+RUN apt-get update && apt-get install -y --no-install-recommends unzip git \
+    && rm -rf /var/lib/apt/lists/*
+COPY modding /modding
+RUN sed -i 's/\r$//' /modding/build-bepinex.sh \
+    && bash /modding/build-bepinex.sh prepare /out/bepinex \
+    && cp /modding/build-bepinex.sh /out/bepinex/build-bepinex.sh
+
 FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl python3 tini procps tar gzip tzdata libnss-wrapper \
     lib32gcc-s1 lib32stdc++6 lib32z1 wine64 wine xvfb xauth x11-utils \
+    dotnet-runtime-8.0 \
     && rm -rf /var/lib/apt/lists/*
 # Unity 6000.6 host does not boot under Ubuntu's Wine 9.0 (the 64-bit host
 # either access-violates during import resolution or hangs before opening a
@@ -54,6 +66,8 @@ COPY container/server/entrypoint /opt/moon/bin/entrypoint
 COPY container/server/steam-redist /opt/moon/bin/steam-redist
 COPY container/server/server-import /opt/moon/bin/server-import
 COPY container/server/health.py /opt/moon/bin/health.py
+COPY container/server/bepinex-setup /opt/moon/bin/bepinex-setup
+COPY --from=bepinex /out/bepinex /opt/moon/bepinex
 COPY container/server/redist-lock.json /opt/moon/bin/redist-lock.json
 COPY --from=build /out/steam-probe.exe /opt/moon/bin/steam-probe.exe
 COPY --from=build /out/version.dll /opt/moon/mod/version.dll
@@ -65,9 +79,10 @@ COPY ptero/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh /opt/moon/ptero/install.sh \
               /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py \
               /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
-              /opt/moon/bin/server-import \
+              /opt/moon/bin/server-import /opt/moon/bin/bepinex-setup \
     && chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
-              /opt/moon/bin/server-import /opt/moon/ptero/install.sh \
+              /opt/moon/bin/server-import /opt/moon/bin/bepinex-setup \
+              /opt/moon/ptero/install.sh \
               /entrypoint.sh \
     && chmod 644 /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py
 # No USER directive: Wings starts the server as its own uid:gid, and the
@@ -87,6 +102,8 @@ ENV HOME=/home/container \
     MOON_GAME_PORT=27025 \
     MOON_QUERY_PORT=27026 \
     MOON_BACKUP_KEEP=10 \
+    MOON_BEPINEX=0 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     WINEDLLOVERRIDES="mscoree,mshtml=;version=n,b;winmm=b;winealsa.drv=d"
 WORKDIR /home/container
 # Wings does not pass a command: it relies on the image's ENTRYPOINT/CMD to run

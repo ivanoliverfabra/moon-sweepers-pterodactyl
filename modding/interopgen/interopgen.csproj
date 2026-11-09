@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Checkout of Il2CppInterop with patches/il2cppinterop-unity-6000.6.patch applied (build-bepinex.sh makes it). -->
+    <Il2CppInteropDir Condition="'$(Il2CppInteropDir)' == ''">../.work/Il2CppInterop</Il2CppInteropDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(Il2CppInteropDir)/Il2CppInterop.Generator/Il2CppInterop.Generator.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+  </ItemGroup>
+</Project>

@@ -159,6 +159,16 @@
       "field_type": "text"
     },
     {
+      "name": "Enable BepInEx Mods",
+      "description": "1 loads BepInEx 6 plugins from /home/container/mods/plugins. The first start after enabling, and after each game update, spends about a minute preparing BepInEx for the game build.",
+      "env_variable": "MOON_BEPINEX",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|in:0,1",
+      "field_type": "text"
+    },
+    {
       "name": "Timezone",
       "description": "Timezone used for timestamps, e.g. America/New_York or UTC.",
       "env_variable": "TZ",

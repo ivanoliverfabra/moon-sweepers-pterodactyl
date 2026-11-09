@@ -6,6 +6,7 @@ if (($#)); then moon_mode="$1"; fi
 moon_game_pid=""
 moon_x_pid=""
 moon_log_pid=""
+moon_bepinex_log_pid=""
 moon_game_started=0
 moon_stop_requested=0
 moon_forced_stop=0
@@ -194,6 +195,11 @@ moon_cleanup() {
     if [[ "$moon_mode" == run ]]; then
         moon_backup_saved_world || echo "Automatic backup failed; existing save files and older backups were retained." >&2
     fi
+    if [[ -n "$moon_bepinex_log_pid" ]]; then
+        pkill -TERM -P "$moon_bepinex_log_pid" 2>/dev/null || true
+        kill -TERM "$moon_bepinex_log_pid" 2>/dev/null || true
+        wait "$moon_bepinex_log_pid" 2>/dev/null || true
+    fi
     if [[ -n "$moon_log_pid" ]]; then
         sleep 0.2
         kill -TERM "$moon_log_pid" 2>/dev/null || true
@@ -266,6 +272,19 @@ else
     [[ -f /opt/moon/mod/version.dll ]] || { echo "Native server module is not built in this image." >&2; exit 1; }
     [[ "$MOON_SLOT" =~ ^[1-5]$ ]] || { echo "MOON_SLOT must be 1-5." >&2; exit 1; }
     cp /opt/moon/mod/version.dll /data/game/version.dll
+    /opt/moon/bin/bepinex-setup
+    if [[ -f /data/game/winhttp.dll ]]; then
+        # Doorstop is a winhttp.dll proxy; Wine would otherwise use its builtin one.
+        export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}winhttp=n,b"
+        # Plugin output, warnings and errors (with their stack traces) go to the console; loader chatter, debug
+        # lines and Unity's own log (mirrored natively already) stay in game/BepInEx/LogOutput.log.
+        (tail -n +1 -F --sleep-interval=0.5 /data/game/BepInEx/LogOutput.log 2>/dev/null \
+            | mawk -W interactive '/^\[/ { show = !($0 ~ /^\[Debug/ || $0 ~ /^\[[A-Za-z]+ *: *Unity\]/ \
+                       || $0 ~ /^\[(Info|Message) *: *(Il2CppInterop|InteropManager|Preloader|AssemblyPatcher)\]/ \
+                       || $0 ~ /unsupported (return|parameter) type|Chainloader initialized/) }
+                   show { print "BepInEx: " $0; fflush() }') 2>/dev/null &
+        moon_bepinex_log_pid=$!
+    fi
     export MOON_HOST_LOG='Z:\data\logs\moon-host.log'
     export MOON_HOST_STATE='Z:\data\logs\moon-host-state.json'
     export MOON_HOST_COMMAND='Z:\data\control\command'

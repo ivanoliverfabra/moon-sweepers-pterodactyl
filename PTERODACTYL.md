@@ -71,6 +71,29 @@ add Steam transport and packet detail. The Unity player log is written to
 `/dev/null` because it grows without bound; set `MOON_UNITY_LOG` to a file path
 to capture it while debugging.
 
+## Mods (BepInEx)
+
+The image includes BepInEx 6. Stock BepInEx does not start on this game, so the image builds it with the fixes
+described in `modding/README.md`. Mods are off by default. To turn them on:
+
+1. Set **Enable BepInEx Mods** (`MOON_BEPINEX=1`) and restart.
+2. Wait for the first start after enabling. It prints `Preparing BepInEx for this game build`, and takes about a
+   minute while it generates interop assemblies for the imported `GameAssembly.dll`. The result is cached in
+   `/home/container/bepinex-cache` and only rebuilt when the game changes.
+3. Upload plugin `.dll` files to `/home/container/mods/plugins` and restart. Use `mods/patchers` for preloader
+   patchers. Plugin configs and `BepInEx.cfg` are in `mods/config`.
+
+These folders are kept outside the game folder, so a re-import does not remove them.
+
+The console shows BepInEx's plugin loading, warnings and errors, prefixed with `BepInEx:`. The full log is
+`/home/container/game/BepInEx/LogOutput.log`.
+
+Leave `UpdateInteropAssemblies = false` in `BepInEx.cfg`. If you change it, BepInEx tries to rebuild the interop
+assemblies with its own Cpp2IL, which cannot read this game. The startup script sets it back.
+
+Setting `MOON_BEPINEX=0` removes BepInEx's loader (`winhttp.dll`) from the game folder and leaves your mods in
+place.
+
 ## Connecting to the Server
 
 ### 1. Install the Client Module

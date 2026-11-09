@@ -13,3 +13,8 @@
 !ptero/
 !ptero/**
 !Dockerfile.pterodactyl
+!modding/
+!modding/**
+modding/.work/
+modding/**/bin/
+modding/**/obj/

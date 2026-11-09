@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Installs or removes BepInEx in /data/game before the server starts (MOON_BEPINEX=1 enables it).
+#
+# The image carries BepInEx with the patched Il2CppInterop and the offline interop generators (see
+# modding/build-bepinex.sh). Interop assemblies depend on the exact GameAssembly.dll, which only exists once the
+# game has been imported, so they are generated here on the first start and cached per GameAssembly.dll hash.
+#
+# Operator-managed files live outside the game folder, so a re-import does not lose them:
+#   /data/mods/plugins    BepInEx plugins (the BepInEx/plugins folder)
+#   /data/mods/patchers   preloader patchers
+#   /data/mods/config     BepInEx.cfg and plugin configs
+set -euo pipefail
+
+prepared=/opt/moon/bepinex
+game=/data/game
+mods=/data/mods
+cache=/data/bepinex-cache
+
+if [[ "${MOON_BEPINEX:-0}" != 1 ]]; then
+    # Doorstop (winhttp.dll) is what starts BepInEx; without it the rest of the files are inert.
+    if [[ -e "$game/winhttp.dll" ]]; then
+        rm -f "$game/winhttp.dll"
+        echo "BepInEx is disabled (MOON_BEPINEX=0); mods will not load."
+    fi
+    exit 0
+fi
+[[ -d "$prepared/base" ]] || { echo "BepInEx is not included in this image." >&2; exit 1; }
+
+hash=$(sha256sum "$game/GameAssembly.dll" | cut -c1-16)
+interop="$cache/$hash/interop"
+if [[ ! -f "$interop/assembly-hash.txt" ]]; then
+    echo "Preparing BepInEx for this game build (first start only, about a minute)..."
+    log="$cache/generate.log"
+    mkdir -p "$cache"
+    if ! bash "$prepared/build-bepinex.sh" interop "$prepared" "$game" "$interop" >"$log" 2>&1; then
+        tail -n 20 "$log" >&2
+        echo "Generating BepInEx interop assemblies failed; see $log. Starting without mods." >&2
+        rm -f "$game/winhttp.dll"
+        exit 0
+    fi
+    # Only the current game build is kept.
+    find "$cache" -mindepth 1 -maxdepth 1 -type d ! -name "$hash" -exec rm -rf {} +
+    echo "BepInEx is ready for this game build."
+fi
+
+mkdir -p "$mods/plugins" "$mods/patchers" "$mods/config"
+if [[ ! -f "$mods/config/BepInEx.cfg" ]]; then
+    cp "$prepared/base/BepInEx/config/BepInEx.cfg" "$mods/config/BepInEx.cfg"
+elif ! grep -q '^UpdateInteropAssemblies = false' "$mods/config/BepInEx.cfg"; then
+    # BepInEx would delete the interop folder and fail to regenerate it with its own Cpp2IL.
+    if grep -q '^UpdateInteropAssemblies' "$mods/config/BepInEx.cfg"; then
+        sed -i 's/^UpdateInteropAssemblies = .*/UpdateInteropAssemblies = false/' "$mods/config/BepInEx.cfg"
+    else
+        printf '\n[IL2CPP]\nUpdateInteropAssemblies = false\n' >>"$mods/config/BepInEx.cfg"
+    fi
+fi
+
+# Everything BepInEx ships is replaced on each start, so image updates take effect; the operator's folders are
+# linked in (Wine sees Unix symlinks as ordinary folders).
+cp -a "$prepared/base/winhttp.dll" "$prepared/base/doorstop_config.ini" "$prepared/base/.doorstop_version" "$game/"
+rm -rf "$game/dotnet" "$game/BepInEx/core" "$game/BepInEx/interop"
+mkdir -p "$game/BepInEx"
+cp -a "$prepared/base/dotnet" "$game/dotnet"
+cp -a "$prepared/base/BepInEx/core" "$game/BepInEx/core"
+cp -a "$interop" "$game/BepInEx/interop"
+for name in plugins patchers config; do
+    rm -rf "${game:?}/BepInEx/$name"
+    ln -s "$mods/$name" "$game/BepInEx/$name"
+done
+rm -f "$game/BepInEx/LogOutput.log"
+
+count=$(find -L "$mods/plugins" -name '*.dll' -type f 2>/dev/null | wc -l)
+echo "BepInEx is enabled with $count plugin file(s) from /home/container/mods/plugins."

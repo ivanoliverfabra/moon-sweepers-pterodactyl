@@ -1,0 +1,407 @@
+diff --git a/Il2CppInterop.Runtime/Injection/ClassInjector.Debug.cs b/Il2CppInterop.Runtime/Injection/ClassInjector.Debug.cs
+index 47f6796..35dd36b 100644
+--- a/Il2CppInterop.Runtime/Injection/ClassInjector.Debug.cs
++++ b/Il2CppInterop.Runtime/Injection/ClassInjector.Debug.cs
+@@ -80,21 +80,35 @@ public unsafe partial class ClassInjector
+             Logger.Instance.LogDebug("  [{I}] {ReturnType} {Name}({ParametersCount}), {Flags}, {Slot}", i, ToString(method.ReturnType), Marshal.PtrToStringUTF8(method.Name), method.ParametersCount, method.Flags, method.Slot);
+         }
+ 
+-        Logger.Instance.LogDebug(" ImplementedInterfaces ({InterfaceCount}):", classStruct.InterfaceCount);
+-        for (var i = 0; i < classStruct.InterfaceCount; i++)
++        if (classStruct.HasUnifiedInterfaceTable)
+         {
+-            var @interface = UnityVersionHandler.Wrap(classStruct.ImplementedInterfaces[i]);
+-
+-            Logger.Instance.LogDebug("  [{I}] {Name}", i, Marshal.PtrToStringUTF8(@interface.Name));
++            var table = (Il2CppInterfaceTableEntry*)classStruct.InterfaceOffsets;
++            Logger.Instance.LogDebug(" InterfaceTable ({InterfaceCount}, {InterfaceOffsetsCount} with offsets):", classStruct.InterfaceCount, classStruct.InterfaceOffsetsCount);
++            for (var i = 0; table != null && i < classStruct.InterfaceCount; i++)
++            {
++                var @interface = UnityVersionHandler.Wrap(table[i].interfaceType);
++
++                Logger.Instance.LogDebug("  [{I}] {Offset} depth {Depth} - {Name}", i, table[i].offset, table[i].depth, Marshal.PtrToStringUTF8(@interface.Name));
++            }
+         }
+-
+-        Logger.Instance.LogDebug(" InterfaceOffsets ({InterfaceOffsetsCount}):", classStruct.InterfaceOffsetsCount);
+-        for (var i = 0; i < classStruct.InterfaceOffsetsCount; i++)
++        else
+         {
+-            var pair = classStruct.InterfaceOffsets[i];
+-            var @interface = UnityVersionHandler.Wrap(pair.interfaceType);
+-
+-            Logger.Instance.LogDebug("  [{I}] {Offset} - {Name}", i, pair.offset, Marshal.PtrToStringUTF8(@interface.Name));
++            Logger.Instance.LogDebug(" ImplementedInterfaces ({InterfaceCount}):", classStruct.InterfaceCount);
++            for (var i = 0; i < classStruct.InterfaceCount; i++)
++            {
++                var @interface = UnityVersionHandler.Wrap(classStruct.ImplementedInterfaces[i]);
++
++                Logger.Instance.LogDebug("  [{I}] {Name}", i, Marshal.PtrToStringUTF8(@interface.Name));
++            }
++
++            Logger.Instance.LogDebug(" InterfaceOffsets ({InterfaceOffsetsCount}):", classStruct.InterfaceOffsetsCount);
++            for (var i = 0; i < classStruct.InterfaceOffsetsCount; i++)
++            {
++                var pair = classStruct.InterfaceOffsets[i];
++                var @interface = UnityVersionHandler.Wrap(pair.interfaceType);
++
++                Logger.Instance.LogDebug("  [{I}] {Offset} - {Name}", i, pair.offset, Marshal.PtrToStringUTF8(@interface.Name));
++            }
+         }
+ 
+         Logger.Instance.LogDebug(" TypeHierarchy ({TypeHierarchyDepth}):", classStruct.TypeHierarchyDepth);
+diff --git a/Il2CppInterop.Runtime/Injection/ClassInjector.cs b/Il2CppInterop.Runtime/Injection/ClassInjector.cs
+index 473c718..f4cafb7 100644
+--- a/Il2CppInterop.Runtime/Injection/ClassInjector.cs
++++ b/Il2CppInterop.Runtime/Injection/ClassInjector.cs
+@@ -484,28 +484,10 @@ public static unsafe partial class ClassInjector
+             }
+         }
+ 
+-        var interfaceCount = baseClassPointer.InterfaceCount + interfaces.Count;
+-        classPointer.InterfaceCount = (ushort)interfaceCount;
+-        classPointer.ImplementedInterfaces = (Il2CppClass**)Marshal.AllocHGlobal(interfaceCount * IntPtr.Size);
+-        for (var i = 0; i < baseClassPointer.InterfaceCount; i++)
+-            classPointer.ImplementedInterfaces[i] = baseClassPointer.ImplementedInterfaces[i];
+-        for (int i = baseClassPointer.InterfaceCount; i < interfaceCount; i++)
+-            classPointer.ImplementedInterfaces[i] = interfaces[i - baseClassPointer.InterfaceCount].ClassPointer;
+-
+-        var interfaceOffsetsCount = baseClassPointer.InterfaceOffsetsCount + interfaces.Count;
+-        classPointer.InterfaceOffsetsCount = (ushort)interfaceOffsetsCount;
+-        classPointer.InterfaceOffsets =
+-            (Il2CppRuntimeInterfaceOffsetPair*)Marshal.AllocHGlobal(interfaceOffsetsCount *
+-                                                                     Marshal
+-                                                                         .SizeOf<Il2CppRuntimeInterfaceOffsetPair>());
+-        for (var i = 0; i < baseClassPointer.InterfaceOffsetsCount; i++)
+-            classPointer.InterfaceOffsets[i] = baseClassPointer.InterfaceOffsets[i];
+-        for (int i = baseClassPointer.InterfaceOffsetsCount; i < interfaceOffsetsCount; i++)
+-            classPointer.InterfaceOffsets[i] = new Il2CppRuntimeInterfaceOffsetPair
+-            {
+-                interfaceType = interfaces[i - baseClassPointer.InterfaceOffsetsCount].ClassPointer,
+-                offset = offsets[i - baseClassPointer.InterfaceOffsetsCount]
+-            };
++        if (classPointer.HasUnifiedInterfaceTable)
++            BuildUnifiedInterfaceTable(classPointer, baseClassPointer, interfaces, offsets);
++        else
++            BuildInterfaceArrays(classPointer, baseClassPointer, interfaces, offsets);
+ 
+         for (var i = 0; i < abstractMethods.Length; i++)
+         {
+@@ -1186,4 +1168,66 @@ public static unsafe partial class ClassInjector
+ 
+     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+     private delegate void VoidCtorDelegate(IntPtr objectPointer);
++
++    private static void BuildInterfaceArrays(INativeClassStruct classPointer, INativeClassStruct baseClassPointer,
++        List<INativeClassStruct> interfaces, int[] offsets)
++    {
++        var interfaceCount = baseClassPointer.InterfaceCount + interfaces.Count;
++        classPointer.InterfaceCount = (ushort)interfaceCount;
++        classPointer.ImplementedInterfaces = (Il2CppClass**)Marshal.AllocHGlobal(interfaceCount * IntPtr.Size);
++        for (var i = 0; i < baseClassPointer.InterfaceCount; i++)
++            classPointer.ImplementedInterfaces[i] = baseClassPointer.ImplementedInterfaces[i];
++        for (int i = baseClassPointer.InterfaceCount; i < interfaceCount; i++)
++            classPointer.ImplementedInterfaces[i] = interfaces[i - baseClassPointer.InterfaceCount].ClassPointer;
++
++        var interfaceOffsetsCount = baseClassPointer.InterfaceOffsetsCount + interfaces.Count;
++        classPointer.InterfaceOffsetsCount = (ushort)interfaceOffsetsCount;
++        classPointer.InterfaceOffsets =
++            (Il2CppRuntimeInterfaceOffsetPair*)Marshal.AllocHGlobal(interfaceOffsetsCount *
++                                                                     Marshal
++                                                                         .SizeOf<Il2CppRuntimeInterfaceOffsetPair>());
++        for (var i = 0; i < baseClassPointer.InterfaceOffsetsCount; i++)
++            classPointer.InterfaceOffsets[i] = baseClassPointer.InterfaceOffsets[i];
++        for (int i = baseClassPointer.InterfaceOffsetsCount; i < interfaceOffsetsCount; i++)
++            classPointer.InterfaceOffsets[i] = new Il2CppRuntimeInterfaceOffsetPair
++            {
++                interfaceType = interfaces[i - baseClassPointer.InterfaceOffsetsCount].ClassPointer,
++                offset = offsets[i - baseClassPointer.InterfaceOffsetsCount]
++            };
++    }
++
++    // Unity 6000.6+: one table of {interface, vtable offset, depth}. Entries that carry an offset come first
++    // (interface_offsets_count of them, the only ones vtable dispatch searches), then the rest; the total is
++    // interfaces_count. Mirrors Class::SetupInterfaces: inherited entries are one level deeper than in the base,
++    // and the injected interfaces are implemented directly (depth 0).
++    private static void BuildUnifiedInterfaceTable(INativeClassStruct classPointer, INativeClassStruct baseClassPointer,
++        List<INativeClassStruct> interfaces, int[] offsets)
++    {
++        // The table is built lazily; asking for the interfaces makes IL2CPP build the base class's one.
++        if (baseClassPointer.InterfaceOffsets == null && baseClassPointer.InterfaceCount > 0)
++        {
++            var iter = IntPtr.Zero;
++            IL2CPP.il2cpp_class_get_interfaces((IntPtr)baseClassPointer.ClassPointer, ref iter);
++        }
++
++        var baseTable = (Il2CppInterfaceTableEntry*)baseClassPointer.InterfaceOffsets;
++        int baseTotal = baseTable == null ? 0 : baseClassPointer.InterfaceCount;
++        int baseWithOffsets = baseTable == null ? 0 : baseClassPointer.InterfaceOffsetsCount;
++        var total = baseTotal + interfaces.Count;
++        var table = (Il2CppInterfaceTableEntry*)Marshal.AllocHGlobal(Math.Max(total, 1) * sizeof(Il2CppInterfaceTableEntry));
++
++        static int Deeper(int depth) => depth == int.MaxValue ? depth : depth + 1;
++        var next = 0;
++        for (var i = 0; i < baseWithOffsets; i++, next++)
++            table[next] = new Il2CppInterfaceTableEntry { interfaceType = baseTable[i].interfaceType, offset = baseTable[i].offset, depth = Deeper(baseTable[i].depth) };
++        for (var i = 0; i < interfaces.Count; i++, next++)
++            table[next] = new Il2CppInterfaceTableEntry { interfaceType = interfaces[i].ClassPointer, offset = offsets[i], depth = 0 };
++        for (var i = baseWithOffsets; i < baseTotal; i++, next++)
++            table[next] = new Il2CppInterfaceTableEntry { interfaceType = baseTable[i].interfaceType, offset = baseTable[i].offset, depth = Deeper(baseTable[i].depth) };
++
++        classPointer.InterfaceCount = (ushort)total;
++        classPointer.InterfaceOffsetsCount = (ushort)(baseWithOffsets + interfaces.Count);
++        classPointer.InterfaceOffsets = (Il2CppRuntimeInterfaceOffsetPair*)table;
++    }
++
+ }
+diff --git a/Il2CppInterop.Runtime/Runtime/Il2CppStructs.cs b/Il2CppInterop.Runtime/Runtime/Il2CppStructs.cs
+index c2f48fc..e6e2fbc 100644
+--- a/Il2CppInterop.Runtime/Runtime/Il2CppStructs.cs
++++ b/Il2CppInterop.Runtime/Runtime/Il2CppStructs.cs
+@@ -244,6 +244,15 @@ public unsafe struct Il2CppRuntimeInterfaceOffsetPair
+     public int offset;
+ }
+ 
++// Unity 6000.6+: one entry of the merged interface table (see NativeClassStructHandler_6000_6). The first two
++// fields line up with Il2CppRuntimeInterfaceOffsetPair, which is 16 bytes with padding where depth now lives.
++public unsafe struct Il2CppInterfaceTableEntry
++{
++    public Il2CppClass* interfaceType;
++    public int offset;  // vtable offset, or -1 for entries without one
++    public int depth;   // 0 = implemented directly, n = inherited n levels away, int.MaxValue = offset-only
++}
++
+ [StructLayout(LayoutKind.Sequential)]
+ public struct Il2CppObject
+ {
+diff --git a/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Class_6000_6.cs b/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Class_6000_6.cs
+new file mode 100644
+index 0000000..4f1fd56
+--- /dev/null
++++ b/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Class_6000_6.cs
+@@ -0,0 +1,212 @@
++using System;
++using System.Runtime.InteropServices;
++using Il2CppInterop.Runtime.Runtime.VersionSpecific.Type;
++namespace Il2CppInterop.Runtime.Runtime.VersionSpecific.Class
++{
++    // Unity 6000.6 (IL2CPP metadata v108) merged implementedInterfaces and interfaceOffsets into a single
++    // lazily built table of {interface, vtable offset, depth} entries at offset 144, which removes 8 bytes and
++    // shifts every later field down. interface_offsets_count leading entries carry an offset (the ones vtable
++    // dispatch searches); interfaces_count is the total number of entries, and il2cpp_class_get_interfaces
++    // returns the depth-0 (directly implemented) ones. Offsets read from the il2cpp_class_* exports and
++    // Class::SetupInterfaces of a Unity 6000.6.0f1 GameAssembly.dll (static_fields@152, typeHierarchy@168,
++    // unity_user_data@200, instance_size@240, flags@272, typeHierarchyDepth@296, bitfields@301, vtable@304).
++    [ApplicableToUnityVersionsSince("6000.6.0")]
++    public unsafe class NativeClassStructHandler_6000_6 : INativeClassStructHandler
++    {
++        public int Size() => sizeof(Il2CppClass_6000_6);
++        public INativeClassStruct CreateNewStruct(int vTableSlots)
++        {
++            IntPtr ptr = Marshal.AllocHGlobal(Size() + sizeof(VirtualInvokeData) * vTableSlots);
++            Il2CppClass_6000_6* _ = (Il2CppClass_6000_6*)ptr;
++            *_ = default;
++            return new NativeStructWrapper(ptr);
++        }
++        public INativeClassStruct Wrap(Il2CppClass* ptr)
++        {
++            if (ptr == null) return null;
++            return new NativeStructWrapper((IntPtr)ptr);
++        }
++        internal unsafe struct Il2CppClass_6000_6
++        {
++            public Il2CppImage* image;                                  // 0
++            public void* gc_desc;                                       // 8
++            public byte* name;                                          // 16
++            public byte* namespaze;                                     // 24
++            public NativeTypeStructHandler_27_0.Il2CppType_27_0 byval_arg; // 32
++            public NativeTypeStructHandler_27_0.Il2CppType_27_0 this_arg;  // 48
++            public Il2CppClass* element_class;                          // 64
++            public Il2CppClass* castClass;                              // 72
++            public Il2CppClass* declaringType;                          // 80
++            public Il2CppClass* parent;                                 // 88
++            public void* generic_class;                                 // 96
++            public Il2CppMetadataTypeHandle typeMetadataHandle;         // 104
++            public void* interopData;                                   // 112
++            public Il2CppClass* klass;                                  // 120
++            public Il2CppFieldInfo* fields;                             // 128
++            public Il2CppMethodInfo** methods;                          // 136
++            public Il2CppInterfaceTableEntry* interfaceTable;           // 144 (replaces implementedInterfaces + interfaceOffsets)
++            public void* static_fields;                                 // 152
++            public void* rgctx_data;                                    // 160
++            public Il2CppClass** typeHierarchy;                         // 168
++            public Il2CppEventInfo* events;                             // 176 (lazily created)
++            public Il2CppPropertyInfo* properties;                      // 184 (lazily created)
++            public Il2CppClass** nestedTypes;                           // 192 (lazily created)
++            public void* unity_user_data;                               // 200
++            public Il2CppGCHandle initializationExceptionGCHandle;      // 208
++            public uint cctor_started;                                  // 216
++            public uint cctor_finished_or_no_cctor;                     // 220
++            public IntPtr cctor_thread;                                 // 224
++            public void* genericContainerHandle;                        // 232
++            public uint instance_size;                                  // 240
++            public uint stack_slot_size;                                // 244
++            public uint actualSize;                                     // 248
++            public uint element_size;                                   // 252
++            public int native_size;                                     // 256
++            public uint static_fields_size;                             // 260
++            public uint thread_static_fields_size;                      // 264
++            public int thread_static_fields_offset;                     // 268
++            public uint flags;                                          // 272
++            public uint token;                                          // 276
++            public ushort method_count;                                 // 280
++            public ushort property_count;                               // 282
++            public ushort field_count;                                  // 284
++            public ushort event_count;                                  // 286
++            public ushort nested_type_count;                            // 288
++            public ushort vtable_count;                                 // 290
++            public ushort interfaces_count;                             // 292 (total interfaceTable entries)
++            public ushort interface_offsets_count;                      // 294 (leading entries that carry a vtable offset)
++            public byte typeHierarchyDepth;                             // 296
++            public byte genericRecursionDepth;                          // 297
++            public byte rank;                                           // 298
++            public byte minimumAlignment;                               // 299
++            public byte packingSize;                                    // 300
++            public byte _bitfield0;                                     // 301 (initialized group)
++            public byte _bitfield1;                                     // 302
++            public byte _bitfield2;                                     // 303 (vtable follows at 304)
++            internal enum Bitfield0 : byte
++            {
++                BIT_initialized_and_no_error = 0,
++                initialized_and_no_error = (1 << BIT_initialized_and_no_error),
++                BIT_initialized = 1,
++                initialized = (1 << BIT_initialized),
++                BIT_enumtype = 2,
++                enumtype = (1 << BIT_enumtype),
++                BIT_nullabletype = 3,
++                nullabletype = (1 << BIT_nullabletype),
++                BIT_is_generic = 4,
++                is_generic = (1 << BIT_is_generic),
++                BIT_has_references = 5,
++                has_references = (1 << BIT_has_references),
++                BIT_init_pending = 6,
++                init_pending = (1 << BIT_init_pending),
++                BIT_size_init_pending = 7,
++                size_init_pending = (1 << BIT_size_init_pending),
++            }
++
++            internal enum Bitfield1 : byte
++            {
++                BIT_size_inited = 0,
++                size_inited = (1 << BIT_size_inited),
++                BIT_has_finalize = 1,
++                has_finalize = (1 << BIT_has_finalize),
++                BIT_has_cctor = 2,
++                has_cctor = (1 << BIT_has_cctor),
++                BIT_is_blittable = 3,
++                is_blittable = (1 << BIT_is_blittable),
++                BIT_is_import_or_windows_runtime = 4,
++                is_import_or_windows_runtime = (1 << BIT_is_import_or_windows_runtime),
++                BIT_is_vtable_initialized = 5,
++                is_vtable_initialized = (1 << BIT_is_vtable_initialized),
++                BIT_is_byref_like = 6,
++                is_byref_like = (1 << BIT_is_byref_like),
++            }
++
++        }
++
++        internal class NativeStructWrapper : INativeClassStruct
++        {
++            public NativeStructWrapper(IntPtr ptr) => Pointer = ptr;
++            private static int _bitfield0offset = Marshal.OffsetOf<Il2CppClass_6000_6>(nameof(Il2CppClass_6000_6._bitfield0)).ToInt32();
++            private static int _bitfield1offset = Marshal.OffsetOf<Il2CppClass_6000_6>(nameof(Il2CppClass_6000_6._bitfield1)).ToInt32();
++            public IntPtr Pointer { get; }
++            private Il2CppClass_6000_6* _ => (Il2CppClass_6000_6*)Pointer;
++            public IntPtr VTable => IntPtr.Add(Pointer, sizeof(Il2CppClass_6000_6));
++            public Il2CppClass* ClassPointer => (Il2CppClass*)Pointer;
++            public INativeTypeStruct ByValArg => UnityVersionHandler.Wrap((Il2CppTypeStruct*)&_->byval_arg);
++            public INativeTypeStruct ThisArg => UnityVersionHandler.Wrap((Il2CppTypeStruct*)&_->this_arg);
++            public ref uint InstanceSize => ref _->instance_size;
++            public ref ushort VtableCount => ref _->vtable_count;
++            public ref ushort InterfaceCount => ref _->interfaces_count;
++            public ref ushort InterfaceOffsetsCount => ref _->interface_offsets_count;
++            public ref byte TypeHierarchyDepth => ref _->typeHierarchyDepth;
++            public ref int NativeSize => ref _->native_size;
++            public ref uint ActualSize => ref _->actualSize;
++            public ref ushort MethodCount => ref _->method_count;
++            public ref ushort FieldCount => ref _->field_count;
++            public ref Il2CppClassAttributes Flags => ref *(Il2CppClassAttributes*)&_->flags;
++            public ref IntPtr Name => ref *(IntPtr*)&_->name;
++            public ref IntPtr Namespace => ref *(IntPtr*)&_->namespaze;
++            public ref Il2CppImage* Image => ref _->image;
++            public ref Il2CppClass* Parent => ref _->parent;
++            public ref Il2CppClass* ElementClass => ref _->element_class;
++            public ref Il2CppClass* CastClass => ref _->castClass;
++            public ref Il2CppClass* DeclaringType => ref _->declaringType;
++            public ref Il2CppClass* Class => ref _->klass;
++            public ref Il2CppFieldInfo* Fields => ref _->fields;
++            public ref Il2CppMethodInfo** Methods => ref _->methods;
++            // There is no separate implemented-interfaces array on this version; see HasUnifiedInterfaceTable.
++            private Il2CppClass** _noImplementedInterfaces;
++            public ref Il2CppClass** ImplementedInterfaces => ref _noImplementedInterfaces;
++            public ref Il2CppRuntimeInterfaceOffsetPair* InterfaceOffsets => ref *(Il2CppRuntimeInterfaceOffsetPair**)&_->interfaceTable;
++            public bool HasUnifiedInterfaceTable => true;
++            public ref Il2CppClass** TypeHierarchy => ref _->typeHierarchy;
++            public bool ValueType
++            {
++                get => ByValArg.ValueType && ThisArg.ValueType;
++                set { }
++            }
++            public bool Initialized
++            {
++                get => this.CheckBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_initialized);
++                set => this.SetBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_initialized, value);
++            }
++            public bool EnumType
++            {
++                get => this.CheckBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_enumtype);
++                set => this.SetBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_enumtype, value);
++            }
++            public bool IsGeneric
++            {
++                get => this.CheckBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_is_generic);
++                set => this.SetBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_is_generic, value);
++            }
++            public bool HasReferences
++            {
++                get => this.CheckBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_has_references);
++                set => this.SetBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_has_references, value);
++            }
++            public bool SizeInited
++            {
++                get => this.CheckBit(_bitfield1offset, (int)Il2CppClass_6000_6.Bitfield1.BIT_size_inited);
++                set => this.SetBit(_bitfield1offset, (int)Il2CppClass_6000_6.Bitfield1.BIT_size_inited, value);
++            }
++            public bool HasFinalize
++            {
++                get => this.CheckBit(_bitfield1offset, (int)Il2CppClass_6000_6.Bitfield1.BIT_has_finalize);
++                set => this.SetBit(_bitfield1offset, (int)Il2CppClass_6000_6.Bitfield1.BIT_has_finalize, value);
++            }
++            public bool IsVtableInitialized
++            {
++                get => this.CheckBit(_bitfield1offset, (int)Il2CppClass_6000_6.Bitfield1.BIT_is_vtable_initialized);
++                set => this.SetBit(_bitfield1offset, (int)Il2CppClass_6000_6.Bitfield1.BIT_is_vtable_initialized, value);
++            }
++            public bool InitializedAndNoError
++            {
++                get => this.CheckBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_initialized_and_no_error);
++                set => this.SetBit(_bitfield0offset, (int)Il2CppClass_6000_6.Bitfield0.BIT_initialized_and_no_error, value);
++            }
++        }
++
++    }
++
++}
+diff --git a/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Interfaces.cs b/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Interfaces.cs
+index 930da95..3f7dacb 100644
+--- a/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Interfaces.cs
++++ b/Il2CppInterop.Runtime/Runtime/VersionSpecific/Class/Interfaces.cs
+@@ -52,4 +52,8 @@ public interface INativeClassStruct : INativeStruct
+     unsafe ref Il2CppClass** ImplementedInterfaces { get; }
+     unsafe ref Il2CppRuntimeInterfaceOffsetPair* InterfaceOffsets { get; }
+     unsafe ref Il2CppClass** TypeHierarchy { get; }
++
++    // Unity 6000.6+ keeps implemented interfaces and interface offsets in one table of Il2CppInterfaceTableEntry
++    // (reachable through InterfaceOffsets); ImplementedInterfaces is unused there.
++    bool HasUnifiedInterfaceTable => false;
+ }

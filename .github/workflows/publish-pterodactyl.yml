@@ -8,6 +8,8 @@ on:
       - ptero/**
       - native/**
       - container/server/**
+      - modding/**
+      - .dockerignore
       - .github/workflows/publish-pterodactyl.yml
   workflow_dispatch:
 
