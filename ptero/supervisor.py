@@ -78,7 +78,9 @@ class IdApiHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path == "/":
             state = host_state()
-            state["players"] = player_names(state)
+            entries = player_entries(state)
+            state["players"] = [entry["name"] for entry in entries]
+            state["player_entries"] = entries
             self._send(200, "application/json",
                        json.dumps(state, indent=2).encode())
         elif path == "/players":
