@@ -14,6 +14,7 @@ import game_download
 import modpack
 import modpm
 import mods
+import versions
 
 ENTRYPOINT = "/opt/moon/bin/entrypoint"
 IMPORTER = "/opt/moon/bin/server-import"
@@ -333,6 +334,12 @@ def main():
         return 1
     # With a Modpack Token set, install that pack's mods before BepInEx sees the mods folder.
     modpack.sync(pack)
+    needed = versions.requires(pack)
+    game_name = (needed["game"] or {}).get("name") or f"build {(needed['game'] or {}).get('build') or 'unknown'}"
+    print(f"Players need game {game_name} and client {needed['client'] or 'any'}; launchers only allow those.", flush=True)
+    if not needed["client"]:
+        print("Tip: set Client Version (e.g. v0.2.2) so players' launchers install the client this server expects.",
+              flush=True)
 
     os.environ.setdefault("WINEARCH", "win64")
     os.environ.setdefault("WINEPREFIX", "/data/wineprefix")

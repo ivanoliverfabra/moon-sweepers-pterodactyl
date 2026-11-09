@@ -30,6 +30,8 @@ import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
+import versions
+
 MODS_DIR = Path("/data/mods")
 PLUGINS_DIR = MODS_DIR / "plugins"
 PATCHERS_DIR = MODS_DIR / "patchers"
@@ -300,6 +302,8 @@ def manifest(game_port):
         "enabled": enabled(),
         "game": NEXUS_GAME,
         "hash": digest.hexdigest(),
+        # What players must run to join, with or without mods: {game: {name, build}, client}. See versions.py.
+        "requires": versions.requires(raw.get("pack") if isinstance(raw, dict) else None),
         # The modpack this server installs (MOON_MODPACK), when it uses one: {token, name, revision, game, client},
         # where game ({name, size, sha256}) and client (a release tag) are what players must run, or null for any.
         "modpack": raw.get("pack") if isinstance(raw, dict) and isinstance(raw.get("pack"), dict) else None,
@@ -443,12 +447,13 @@ def describe(game_port):
     """Console output for the `mods` command."""
     full = manifest(game_port)
     lines = [f"BepInEx mods are {'enabled' if full['enabled'] else 'disabled (MOON_BEPINEX=0)'}."]
+    needed = full["requires"]
+    game = needed["game"] or {}
+    lines.append(f"Players need game {game.get('name') or 'build ' + str(game.get('build') or 'unknown')} "
+                 f"and client {needed['client'] or 'any (set Client Version)'}.")
     if full["modpack"]:
         pack = full["modpack"]
         lines.append(f"Modpack: {pack.get('name')} ({pack.get('token')}) revision {pack.get('revision')}.")
-        game = (pack.get("game") or {}).get("name")
-        if game or pack.get("client"):
-            lines.append(f"Players need game {game or 'any'} and client {pack.get('client') or 'any'}.")
     if not full["mods"]:
         lines.append("No mods are listed in /home/container/mods/mods.json.")
     for mod in full["mods"]:

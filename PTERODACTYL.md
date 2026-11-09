@@ -91,6 +91,18 @@ add Steam transport and packet detail. The Unity player log is written to
 `/dev/null` because it grows without bound; set `MOON_UNITY_LOG` to a file path
 to capture it while debugging.
 
+## Game and client versions
+
+Players' launchers only let them join with exactly the game and client module this server runs, with or without mods:
+
+- **Game:** the server reports the build of the game in `game-source` (from `GameAssembly.dll`). When the game came from
+  the API, it also reports which download that was, so launchers can install the same one in a click. With game files
+  uploaded by hand, launchers can only tell players that their build is different.
+- **Client:** set **Client Version** (`MOON_CLIENT_VERSION`) to the client module release this server works with, e.g.
+  `v0.2.2`. Launchers install exactly that one. A modpack's client version takes precedence. Empty allows any client.
+
+The console prints both on start, and `mods` shows them. Launchers read them from `GET /mods` (`requires`).
+
 ## Mods (BepInEx)
 
 The image includes BepInEx 6. Stock BepInEx does not start on this game, so the image builds it with the fixes

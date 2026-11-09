@@ -199,6 +199,16 @@
       "field_type": "text"
     },
     {
+      "name": "Client Version",
+      "description": "The client module release players must have to join, e.g. v0.2.2 (from the client releases). Players' launchers install exactly this one and only allow Play with it. A modpack's own client version takes precedence. Leave empty to allow any client.",
+      "env_variable": "MOON_CLIENT_VERSION",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|regex:/^v[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}(-[A-Za-z0-9.]{1,32})?$/",
+      "field_type": "text"
+    },
+    {
       "name": "Timezone",
       "description": "Timezone used for timestamps, e.g. America/New_York or UTC.",
       "env_variable": "TZ",
