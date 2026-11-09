@@ -573,6 +573,7 @@ static void wide_line(Object *text,char *out,size_t size,int max_chars){
  int bytes=WideCharToMultiByte(CP_UTF8,0,il.string_chars(text),n,out,(int)size-1,NULL,NULL);out[bytes>0?bytes:0]=0;
  for(char *c=out;*c;c++)if((unsigned char)*c<32)*c=' ';
 }
+static bool __cdecl has_log_callback(const Method *info){(void)info;return true;}
 static void __cdecl log_callback(Object *text,Object *stack,int type,bool main_thread,const Method *info){
  real_log_callback(text,stack,type,main_thread,info);
  /* Errors, asserts, exceptions and warnings (the game explains refused saves and joins with warnings). */
@@ -598,10 +599,25 @@ static bool task_flag(Object *task,const char *name){
  const Method *m=method(il.object_class(task),name,0);if(!m)return false;
  Object *exception=NULL;Object *result=il.invoke(m,task,NULL,&exception);return !exception&&result&&*(uint8_t *)il.unbox(result)!=0;
 }
+static const Method *save_outer,*save_inner;static bool save_inside;
+static void exception_text(Object *exception,char *out,size_t size){
+ out[0]=0;il.exception(exception,out,(int)size);for(char *c=out;*c;c++)if((unsigned char)*c<32)*c=' ';
+}
+/* SaveProgress first finishes the crew's in-progress work (tool strokes, presses, runs), which can throw once
+   players are in the world; the exception then kills the join coroutine before any of the world is sent. Run the
+   save through runtime_invoke so the exception is caught, and if that part fails, save without it. */
 static Object *__cdecl save_progress_hook(Object *self,const Method *info){
- Object *task=real_save_progress(self,info);
- if(mode==MODE_SERVER&&!task)report("World save was refused: SaveProgress returned no task");
- if(mode==MODE_SERVER&&task){
+ if(mode!=MODE_SERVER||save_inside||!save_outer)return real_save_progress(self,info);
+ Object *exception=NULL;save_inside=true;Object *task=il.invoke(save_outer,self,NULL,&exception);save_inside=false;
+ if(exception){
+  char detail[300],text[512];exception_text(exception,detail,sizeof(detail));
+  snprintf(text,sizeof(text),"World save failed while finishing players' ongoing work, saving without it: %s",detail);report(text);
+  task=NULL;exception=NULL;
+  if(save_inner){uint8_t complete=0;void *args[]={&complete};task=il.invoke(save_inner,self,args,&exception);}
+  if(exception){exception_text(exception,detail,sizeof(detail));snprintf(text,sizeof(text),"World save failed: %s",detail);report(text);task=NULL;}
+ }
+ if(!task)report("World save was refused: SaveProgress returned no task");
+ if(task){
   if(save_task)il.gc_free(save_task);
   save_task=il.gc_new(task,false);save_started=GetTickCount64();save_slow_said=false;report("World save started");
  }
@@ -799,8 +815,9 @@ bool MoonNet_Install(const void *image,void (*log_line)(const char *)){
   HOOK(network,"SendMessageToUser",5,net_send);HOOK(network,"ReceiveMessagesOnChannel",3,net_receive);HOOK(network,"AcceptSessionWithUser",1,net_accept);HOOK(network,"CloseSessionWithUser",1,net_close);HOOK(network,"CloseChannelWithUser",2,net_close_channel);HOOK(network,"GetSessionConnectionInfo",3,net_info);
   HOOK(il.klass(steam_image,"Steamworks","SteamUser"),"GetSteamID",0,server_steam_id);
   HOOK(game.lobby_class,"Avatar",1,no_avatar);HOOK(game.lobby_class,"PlayerName",1,player_name);
-  {void *world=klass("MoonWorld");if(!hook_method(world,"SaveProgress",0,save_progress_hook,(void **)&real_save_progress))report("World save monitoring is unavailable");}
-  if(core_image){void *application=il.klass(core_image,"UnityEngine","Application");if(!hook_method(application,"CallLogCallback",4,log_callback,(void **)&real_log_callback))report("Game error logging is unavailable");}
+  {void *world=klass("MoonWorld");save_outer=method(world,"SaveProgress",0);save_inner=method(world,"SaveProgress",1);if(!hook_method(world,"SaveProgress",0,save_progress_hook,(void **)&real_save_progress))report("World save monitoring is unavailable");}
+  /* Unity only passes log messages to managed code when a handler is registered; the game registers none. */
+  if(core_image){void *application=il.klass(core_image,"UnityEngine","Application");if(!hook_method(application,"CallLogCallback",4,log_callback,(void **)&real_log_callback)||!hook_method(application,"HasLogCallback",0,has_log_callback,NULL))report("Game error logging is unavailable");}
   if(!hook_method(klass("MoonSteam"),"OnDestroy",0,steam_destroy,(void **)&real_steam_destroy))ok=false;
  }else{
   MH_STATUS h=MH_CreateHook((void *)sdk.next_callback,observe_callback,(void **)&real_next_callback);if(h!=MH_OK||MH_EnableHook((void *)sdk.next_callback)!=MH_OK)ok=false;
