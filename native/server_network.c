@@ -575,8 +575,8 @@ static void wide_line(Object *text,char *out,size_t size,int max_chars){
 }
 static void __cdecl log_callback(Object *text,Object *stack,int type,bool main_thread,const Method *info){
  real_log_callback(text,stack,type,main_thread,info);
- /* Error, Assert and Exception only; never let logging itself get in the way of the game. */
- if(mode!=MODE_SERVER||(type!=0&&type!=1&&type!=4))return;
+ /* Errors, asserts, exceptions and warnings (the game explains refused saves and joins with warnings). */
+ if(mode!=MODE_SERVER||(type!=0&&type!=1&&type!=2&&type!=4))return;
  if(InterlockedCompareExchange(&log_busy,1,0)!=0)return;
  char message[LOG_TEXT],where[160];wide_line(text,message,sizeof(message),LOG_TEXT);wide_line(stack,where,sizeof(where),150);
  uint32_t hash=2166136261u;for(const unsigned char *c=(const unsigned char *)message;*c;c++)hash=(hash^*c)*16777619u;
@@ -587,7 +587,7 @@ static void __cdecl log_callback(Object *text,Object *stack,int type,bool main_t
  if(slot<LOG_KINDS){log_seen[slot].count++;if(!say&&now-log_seen[slot].last>=60000&&log_seen[slot].count>log_seen[slot].reported+1){log_seen[slot].last=now;say=true;}}
  if(say){
   unsigned extra=slot<LOG_KINDS?log_seen[slot].count-1-log_seen[slot].reported:0;if(slot<LOG_KINDS)log_seen[slot].reported=log_seen[slot].count-1;
-  if(extra)snprintf(line,sizeof(line),"Game error (seen %u more times): %s | %s",extra,message,where);else snprintf(line,sizeof(line),"Game error: %s | %s",message,where);
+  if(extra)snprintf(line,sizeof(line),"Game %s (seen %u more times): %s | %s",type==2?"warning":"error",extra,message,where);else snprintf(line,sizeof(line),"Game %s: %s | %s",type==2?"warning":"error",message,where);
   report(line);
  }
  InterlockedExchange(&log_busy,0);
@@ -600,6 +600,7 @@ static bool task_flag(Object *task,const char *name){
 }
 static Object *__cdecl save_progress_hook(Object *self,const Method *info){
  Object *task=real_save_progress(self,info);
+ if(mode==MODE_SERVER&&!task)report("World save was refused: SaveProgress returned no task");
  if(mode==MODE_SERVER&&task){
   if(save_task)il.gc_free(save_task);
   save_task=il.gc_new(task,false);save_started=GetTickCount64();save_slow_said=false;report("World save started");
