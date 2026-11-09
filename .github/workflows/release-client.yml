@@ -1,8 +1,9 @@
 name: Build and release Moon Sweepers client module
 
 # Publishes moon-sweepers-dedicated-server.zip (client module + installer files)
-# that client/install-moon-client.ps1 downloads. Push a tag such as v0.2.0, or run
-# the workflow manually with a tag name.
+# that client/install-moon-client.ps1 downloads, and moon-bepinex.zip (BepInEx with
+# the Unity 6000.6 fixes, see modding/README.md) that the launcher installs.
+# Push a tag such as v0.2.0, or run the workflow manually with a tag name.
 on:
   push:
     tags: ['v*']
@@ -25,15 +26,22 @@ jobs:
         run: docker buildx build -f native/Dockerfile.build -o type=local,dest=native/out native
       - name: Package release ZIP
         run: python3 scripts/package.py
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build BepInEx bundle
+        run: |
+          bash modding/build-bepinex.sh bundle dist/moon-bepinex.zip
+          (cd dist && sha256sum moon-bepinex.zip > moon-bepinex.zip.sha256)
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          zip=dist/moon-sweepers-dedicated-server.zip
+          files="dist/moon-sweepers-dedicated-server.zip dist/moon-bepinex.zip dist/moon-bepinex.zip.sha256"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$zip" --clobber
+            gh release upload "$TAG" $files --clobber
           else
-            gh release create "$TAG" "$zip" --title "$TAG" --target "$GITHUB_SHA" \
-              --notes "Client module and installer files. Install with client/install-moon-client.ps1."
+            gh release create "$TAG" $files --title "$TAG" --target "$GITHUB_SHA" \
+              --notes "Client module and installer files (install with client/install-moon-client.ps1), and the BepInEx bundle the launcher installs."
           fi

@@ -10,6 +10,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import mods
+
 ENTRYPOINT = "/opt/moon/bin/entrypoint"
 IMPORTER = "/opt/moon/bin/server-import"
 SYNC_GAME = "/opt/moon/ptero/sync-game.py"
@@ -64,6 +66,12 @@ def player_entries(state):
         if isinstance(p, dict) and isinstance(p.get("name"), str)
     ]
 
+def game_port():
+    try:
+        return int(os.environ.get("MOON_GAME_PORT", "27025"))
+    except ValueError:
+        return 27025
+
 def player_names(state):
     return [entry["name"] for entry in player_entries(state)]
 
@@ -81,6 +89,7 @@ class IdApiHandler(BaseHTTPRequestHandler):
             entries = player_entries(state)
             state["players"] = [entry["name"] for entry in entries]
             state["player_entries"] = entries
+            state["mods"] = mods.summary(game_port())
             self._send(200, "application/json",
                        json.dumps(state, indent=2).encode())
         elif path == "/players":
@@ -92,6 +101,9 @@ class IdApiHandler(BaseHTTPRequestHandler):
                            "players": [entry["name"] for entry in entries],
                            "entries": entries,
                        }, indent=2).encode())
+        elif path == "/mods":
+            self._send(200, "application/json",
+                       json.dumps(mods.manifest(game_port()), indent=2).encode())
         elif path == "/id":
             state = host_state()
             steam_id = state.get("server_steam_id")
@@ -162,7 +174,7 @@ def start_id_api():
     thread.start()
     print(
         f"ID API listening on TCP {port}: GET / (state JSON), GET /id "
-        "(server_steam_id), GET /players, GET /health, GET /icon, GET /banner, GET /motd",
+        "(server_steam_id), GET /players, GET /mods, GET /health, GET /icon, GET /banner, GET /motd",
         flush=True,
     )
     return server
@@ -271,9 +283,11 @@ def console():
                 send_host_command(f"{verb} {argument}".strip())
         elif command in ("", "help"):
             print("Console commands: status, save, stop, players, kick <player>, ban <player>, "
-                  "unban <player>, addmoney <amount>, setmoney <amount>, help", flush=True)
+                  "unban <player>, addmoney <amount>, setmoney <amount>, mods, help", flush=True)
         elif command in ("status", "save"):
             run_control(command)
+        elif command == "mods":
+            print(mods.describe(game_port()), flush=True)
         elif command == "stop":
             request_stop(signal.SIGTERM, None)
         else:
@@ -320,7 +334,7 @@ def main():
     if code:
         return code
 
-    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, help", flush=True)
+    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, mods, help", flush=True)
     child = subprocess.Popen([ENTRYPOINT, "run"], cwd="/home/container", env=os.environ.copy())
     threading.Thread(target=console, daemon=True).start()
     code = child.wait()

@@ -73,18 +73,19 @@ COPY --from=build /out/steam-probe.exe /opt/moon/bin/steam-probe.exe
 COPY --from=build /out/version.dll /opt/moon/mod/version.dll
 COPY --from=build /out/MinHook-LICENSE.txt /opt/moon/mod/MinHook-LICENSE.txt
 COPY ptero/supervisor.py /opt/moon/ptero/supervisor.py
+COPY ptero/mods.py /opt/moon/ptero/mods.py
 COPY ptero/sync-game.py /opt/moon/ptero/sync-game.py
 COPY ptero/install.sh /opt/moon/ptero/install.sh
 COPY ptero/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh /opt/moon/ptero/install.sh \
-              /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py \
+              /opt/moon/ptero/supervisor.py /opt/moon/ptero/mods.py /opt/moon/ptero/sync-game.py \
               /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
               /opt/moon/bin/server-import /opt/moon/bin/bepinex-setup \
     && chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
               /opt/moon/bin/server-import /opt/moon/bin/bepinex-setup \
               /opt/moon/ptero/install.sh \
               /entrypoint.sh \
-    && chmod 644 /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py
+    && chmod 644 /opt/moon/ptero/supervisor.py /opt/moon/ptero/mods.py /opt/moon/ptero/sync-game.py
 # No USER directive: Wings starts the server as its own uid:gid, and the
 # install container must stay root to write into /mnt/server.
 ENV HOME=/home/container \

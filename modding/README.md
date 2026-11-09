@@ -18,6 +18,7 @@ Then copy the contents of `out/bepinex` into the game folder. The script needs b
 The work also splits into two steps, which the server image uses:
 
 - `build-bepinex.sh prepare <dir>` builds everything that doesn't need the game files: `<dir>/base` (BepInEx with the patched core), `<dir>/tools` (both generators) and `<dir>/unity-libs`. `Dockerfile.pterodactyl` runs this in its `bepinex` stage.
+- `build-bepinex.sh bundle <zip>` builds `moon-bepinex.zip` for the launcher: the prepared folder with both generators published as self-contained Windows programs (so players don't need .NET), plus `bundle.json`. The client release workflow publishes it, with a `.sha256` file, next to the client module. The launcher generates interop itself, the same way.
 - `build-bepinex.sh interop <dir> <game folder> <output>` generates the interop assemblies for one `GameAssembly.dll`. It needs only the .NET 8 runtime. `container/server/bepinex-setup` runs it on the server's first start with `MOON_BEPINEX=1` and caches the result per `GameAssembly.dll` hash (see `PTERODACTYL.md`).
 
 The script does the following:

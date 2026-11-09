@@ -16,6 +16,9 @@
 #                                                     with the patched core), <dir>/tools, <dir>/unity-libs
 #   build-bepinex.sh interop <dir> <game> <output>    interop assemblies for one GameAssembly.dll, using a
 #                                                     prepared <dir>; needs only the .NET 8 runtime
+#   build-bepinex.sh bundle <zip>                     the launcher's download: a prepared folder whose generators
+#                                                     are self-contained Windows programs (tools/*/<name>.exe),
+#                                                     plus bundle.json; the launcher runs the interop step itself
 # Needs: bash, curl, git, unzip, sha256sum, .NET 8 SDK (the interop step alone needs only the runtime).
 set -euo pipefail
 
@@ -61,8 +64,11 @@ prepare() { # dir
 
   echo "Publishing the interop generators"
   rm -rf "$dir/tools"
-  dotnet publish "$here/dummygen" -c Release -v quiet -nologo -o "$dir/tools/dummygen"
-  dotnet publish "$here/interopgen" -c Release -v quiet -nologo -p:Il2CppInteropDir="$work/Il2CppInterop" \
+  # TOOLS_RID (e.g. win-x64) publishes them self-contained, for machines without .NET.
+  local publish=(-c Release -v quiet -nologo)
+  if [ -n "${TOOLS_RID:-}" ]; then publish+=(-r "$TOOLS_RID" --self-contained true); fi
+  dotnet publish "$here/dummygen" "${publish[@]}" -o "$dir/tools/dummygen"
+  dotnet publish "$here/interopgen" "${publish[@]}" -p:Il2CppInteropDir="$work/Il2CppInterop" \
     -o "$dir/tools/interopgen"
   rm -rf "$dir/unity-libs" && mkdir -p "$dir/unity-libs" && unzip -q -o "$work/unity-libs.zip" -d "$dir/unity-libs"
 
@@ -103,10 +109,35 @@ interop() { # prepared dir, game folder, output folder
   rm -rf "$out" && mkdir -p "$(dirname "$out")" && mv "$scratch/interop" "$out"
 }
 
+bundle() { # zip
+  local zip=$1 dir="$work/bundle"
+  TOOLS_RID=win-x64 prepare "$dir"
+  cat >"$dir/bundle.json" <<JSON
+{
+  "format": 1,
+  "bepinex": "6.0.0-be.793",
+  "unity_version": "$unity_version",
+  "tools": "win-x64"
+}
+JSON
+  mkdir -p "$(dirname "$zip")"
+  "$(command -v python3 || command -v python)" - "$dir" "$zip" <<'PY'
+import os, sys, zipfile
+root, target = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+    for folder, _dirs, files in os.walk(root):
+        for name in files:
+            full = os.path.join(folder, name)
+            archive.write(full, os.path.relpath(full, root).replace(os.sep, "/"))
+PY
+  echo "Wrote $zip"
+}
+
 case "${1:-}" in
   prepare) prepare "$2" ;;
+  bundle) bundle "$2" ;;
   interop) interop "$2" "$3" "$4" ;;
-  "") echo "Usage: $0 <game folder> <output folder> | prepare <dir> | interop <dir> <game> <output>" >&2; exit 2 ;;
+  "") echo "Usage: $0 <game folder> <output folder> | prepare <dir> | interop <dir> <game> <output> | bundle <zip>" >&2; exit 2 ;;
   *)
     game=$(cd "$1" && pwd)
     out=$2
