@@ -153,7 +153,19 @@ def _entry(raw, index, claimed, errors):
         url = None
 
     found, missing = {"files": [], "patchers": []}, []
+    # A modpack's client-only mod: not installed here, so its files are the registry's list (paths and hashes).
+    client_files = raw.get("client_files") if raw.get("side") == "client" else None
+    for record in client_files if isinstance(client_files, list) else []:
+        if not isinstance(record, dict) or record.get("folder") not in ("plugins", "patchers"):
+            continue
+        relative, sha, size = record.get("path"), record.get("sha256"), record.get("size")
+        if (isinstance(relative, str) and _mod_file(PLUGINS_DIR, relative) is not None and isinstance(sha, str)
+                and re.fullmatch(r"[0-9a-f]{64}", sha) and isinstance(size, int) and size >= 0):
+            found["files" if record["folder"] == "plugins" else "patchers"].append(
+                {"path": relative, "size": size, "sha256": sha})
     for key, label, folder in _folders():
+        if client_files is not None:
+            break
         listed = raw.get(key)
         if listed is None:
             continue
@@ -186,6 +198,22 @@ def _entry(raw, index, claimed, errors):
             errors.append(f"{where}: icon must be a .png, .jpg or .webp inside mods/")
             icon = None
 
+    registry = raw.get("registry") if isinstance(raw.get("registry"), dict) else None
+    if registry is not None:
+        download = _text(registry.get("download"), 1024)
+        registry = {
+            "package": _text(registry.get("package"), 130),
+            "version": _text(registry.get("version"), 32),
+            "sha256": registry.get("sha256") if re.fullmatch(r"[0-9a-f]{64}", str(registry.get("sha256"))) else None,
+            # Where the launcher downloads the package zip, with the player's own sign-in.
+            "download": download if download and download.lower().startswith(("https://", "http://localhost")) else None,
+        }
+        if not all(registry.values()):
+            errors.append(f"{where}: its registry details are incomplete; run mod pack")
+            registry = None
+        else:
+            link = link or _text(raw.get("registry", {}).get("page"), 1024)
+
     required = raw.get("required", True)
     return {
         "id": f"nexus-{nexus['mod_id']}" if nexus else _slug(name),
@@ -195,6 +223,7 @@ def _entry(raw, index, claimed, errors):
         "author": _text(raw.get("author"), 64),
         "required": required if isinstance(required, bool) else True,
         "nexus": nexus,
+        "registry": registry,
         "url": url,
         "link": link,
         "files": found["files"],
@@ -221,6 +250,8 @@ def manifest(game_port):
         entries = []
     seen_ids = set()
     for index, item in enumerate(entries[:MAX_MODS]):
+        if isinstance(item, dict) and item.get("side") == "server":
+            continue  # a modpack's server-only mod: its files are reported as server-only below
         entry = _entry(item, index, claimed, errors)
         if entry is None or not (entry["files"] or entry["patchers"]):
             continue  # nothing a player could match; the reason is in errors
@@ -269,6 +300,8 @@ def manifest(game_port):
         "enabled": enabled(),
         "game": NEXUS_GAME,
         "hash": digest.hexdigest(),
+        # The modpack this server installs (MOON_MODPACK), when it uses one: {token, name, revision}.
+        "modpack": raw.get("pack") if isinstance(raw, dict) and isinstance(raw.get("pack"), dict) else None,
         "mods": mods,
         "server_only": server_only,
         "errors": errors,
@@ -295,8 +328,10 @@ def _read_modinfo(files):
 def _dlls(mod):
     for key, _label, folder in _folders():
         for record in mod[key]:
-            if record["path"].lower().endswith(".dll"):
-                yield record["sha256"], folder.joinpath(*record["path"].split("/"))
+            path = folder.joinpath(*record["path"].split("/"))
+            # A client-only modpack mod has no files here to read.
+            if record["path"].lower().endswith(".dll") and path.is_file():
+                yield record["sha256"], path
 
 
 def _describe_plugins(mods, errors):
@@ -407,6 +442,9 @@ def describe(game_port):
     """Console output for the `mods` command."""
     full = manifest(game_port)
     lines = [f"BepInEx mods are {'enabled' if full['enabled'] else 'disabled (MOON_BEPINEX=0)'}."]
+    if full["modpack"]:
+        pack = full["modpack"]
+        lines.append(f"Modpack: {pack.get('name')} ({pack.get('token')}) revision {pack.get('revision')}.")
     if not full["mods"]:
         lines.append("No mods are listed in /home/container/mods/mods.json.")
     for mod in full["mods"]:

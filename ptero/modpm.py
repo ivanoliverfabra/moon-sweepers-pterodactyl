@@ -36,7 +36,9 @@ HELP = """Mod commands (restart the server after changes so BepInEx loads them):
   mod url <name> <download url>     direct download the launcher uses
   mod nexus <name> <mod id> [file id]
   mod version <name> <version>
-Names match case-insensitively; a unique part of a name is enough."""
+  mod pack                          install the modpack (Modpack Token) again now; mod pack status shows it
+Names match case-insensitively; a unique part of a name is enough. Mods from the modpack are managed by it: change the
+pack (moonpack, or the launcher's Workshop) rather than these commands."""
 
 
 def say(text):
@@ -179,15 +181,21 @@ def _guess_name(url, filename):
 
 # --- commands -------------------------------------------------------------------------------------------------
 
-def install(url, name=None):
-    """Installs (or, for a mod already listed under this name, replaces) a mod from a download link."""
+def install(url, name=None, archive=None, extra=None, quiet=False):
+    """Installs (or, for a mod already listed under this name, replaces) a mod from a download link.
+
+    `archive` installs a file that is already downloaded (and checked) instead; `url` is then only recorded when
+    given. `extra` is merged into the mods.json entry (the modpack sync records where each mod came from this way)."""
     mods.MODS_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=str(mods.MODS_DIR), prefix=".install-") as work:
         work = Path(work)
-        download = work / "download"
-        say(f"Downloading {url} ...")
-        filename = _download(url, download)
-        guessed = name or _guess_name(url, filename)
+        if archive is None:
+            download = work / "download"
+            say(f"Downloading {url} ...")
+            filename = _download(url, download)
+        else:
+            download, filename = Path(archive), Path(archive).name
+        guessed = name or _guess_name(url or filename, filename)
         about = {}
 
         if zipfile.is_zipfile(download):
@@ -240,7 +248,8 @@ def install(url, name=None):
                 entry.pop("patchers")
             if not entry["files"]:
                 entry.pop("files")
-            entry["url"] = url
+            if url:
+                entry["url"] = url
             for key in ("version", "description", "link"):
                 if about.get(key) and not (key == "link" and entry.get("link")):
                     entry[key] = about[key]
@@ -251,10 +260,13 @@ def install(url, name=None):
                 target = icons / f"{mods._slug(entry['name'])}{about['icon'].suffix}"
                 shutil.copyfile(about["icon"], target)
                 entry["icon"] = f"icons/{target.name}"
+            entry.update(extra or {})
             _save(data)
 
     count = len(staged)
-    say(f"Installed {entry['name']} ({count} file(s)). Restart the server to load it; players get it from the launcher.")
+    if not quiet:
+        say(f"Installed {entry['name']} ({count} file(s)). Restart the server to load it; players get it from the launcher.")
+    return entry
 
 
 def _delete_files(entry):
@@ -269,10 +281,17 @@ def _delete_files(entry):
                     parent = parent.parent
 
 
+def _not_from_pack(entry):
+    if entry.get("registry"):
+        raise ValueError(f"{entry['name']} comes from the modpack (Modpack Token). Change the pack instead: "
+                         "moonpack, or the launcher's Workshop page.")
+    return entry
+
+
 def remove(query):
     with _lock:
         data = _load()
-        entry = _find(data, query)
+        entry = _not_from_pack(_find(data, query))
         _delete_files(entry)
         icon = mods._mod_file(mods.MODS_DIR, entry.get("icon")) if entry.get("icon") else None
         if icon is not None and icon.is_file() and icon.parent.name == "icons":
@@ -331,7 +350,7 @@ def adopt():
 def _set(query, key, value):
     with _lock:
         data = _load()
-        entry = _find(data, query)
+        entry = _not_from_pack(_find(data, query))
         if value is None:
             entry.pop(key, None)
         else:
@@ -365,7 +384,7 @@ def run(line):
             install(url, " ".join(args[1:]) or None)
         elif sub == "update" and args:
             with _lock:
-                entry = _find(_load(), " ".join(args))
+                entry = _not_from_pack(_find(_load(), " ".join(args)))
             if not entry.get("url"):
                 raise ValueError(f"{entry['name']} has no download link. Set one with: mod url {entry['name']} <link>")
             install(entry["url"], entry["name"])
@@ -373,6 +392,12 @@ def run(line):
             remove(" ".join(args))
         elif sub == "adopt":
             adopt()
+        elif sub == "pack":
+            import modpack  # imports this module, so only on use
+            if args and args[0].lower() == "status":
+                say(modpack.status())
+            else:
+                modpack.sync()
         elif sub in ("require", "optional") and args:
             name = _set(" ".join(args), "required", sub == "require")
             say(f"{name} is now {'required' if sub == 'require' else 'optional'} for players.")

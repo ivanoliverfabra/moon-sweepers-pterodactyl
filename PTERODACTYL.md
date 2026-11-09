@@ -119,6 +119,28 @@ assemblies with its own Cpp2IL, which cannot read this game. The startup script 
 Setting `MOON_BEPINEX=0` removes BepInEx's loader (`winhttp.dll`) from the game folder and leaves your mods in
 place.
 
+### Using a modpack
+
+The easiest way to run mods is a modpack from the Moon Sweepers registry: a list of mods and versions behind a short
+token, made with the launcher's Workshop page or `moonpack` (the registry's command line). Set:
+
+| Variable | Value |
+| --- | --- |
+| **Enable BepInEx Mods** (`MOON_BEPINEX`) | `1` |
+| **Game API URL** (`MOON_GAME_API_URL`) and **Server Key** (`MOON_SERVER_KEY`) | as for the game download |
+| **Modpack Token** (`MOON_MODPACK`) | the pack's token, e.g. `K7QX3MP`; `K7QX3MP@3` stays on revision 3 |
+
+On every start the server asks the API for the pack, downloads each mod it doesn't have at that version, checks it
+against the registry's checksum, and installs it like `mod install`. Mods the pack no longer lists are removed, and
+mods you installed yourself are left alone. If the API can't be reached, the server starts with what it already has.
+`mod pack` installs the pack again without a restart (restart afterwards so BepInEx loads it); `mod pack status`
+shows which revision is installed.
+
+Each mod in a pack is for everyone, players only (`client`: listed for launchers but not run on the server), or the
+server only (`server`: run here, not offered to players). Players' launchers see the pack in `/mods` and download its
+mods from the registry with their own sign-in. Mods that come from the pack can't be changed with the `mod` commands
+below: change the pack instead. Clearing **Modpack Token** removes the pack's mods on the next start.
+
 ### Managing mods from the console
 
 The `mod` command installs mods and keeps `mods.json` up to date for you:

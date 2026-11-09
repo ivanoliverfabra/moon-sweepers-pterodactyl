@@ -189,6 +189,16 @@
       "field_type": "text"
     },
     {
+      "name": "Modpack Token",
+      "description": "A modpack's token from the Moon Sweepers registry (e.g. K7QX3MP, or K7QX3MP@3 to stay on revision 3). On every start the server installs that pack's mods, and players' launchers download the same mods. Needs Enable BepInEx Mods, Game API URL and Server Key. Leave empty to manage mods yourself.",
+      "env_variable": "MOON_MODPACK",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|regex:/^[A-Za-z0-9]{6,8}(@[0-9]{1,6})?$/",
+      "field_type": "text"
+    },
+    {
       "name": "Timezone",
       "description": "Timezone used for timestamps, e.g. America/New_York or UTC.",
       "env_variable": "TZ",

@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import game_download
+import modpack
 import modpm
 import mods
 
@@ -327,6 +328,8 @@ def main():
               "upload the CONTENTS of your Moon Sweepers 1.0.5 game folder to game-source/ using SFTP.", flush=True)
         print("Missing from game-source: " + ", ".join(missing), flush=True)
         return 1
+    # With a Modpack Token set, install that pack's mods before BepInEx sees the mods folder.
+    modpack.sync()
 
     os.environ.setdefault("WINEARCH", "win64")
     os.environ.setdefault("WINEPREFIX", "/data/wineprefix")
