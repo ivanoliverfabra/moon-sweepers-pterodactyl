@@ -78,6 +78,8 @@ static Peer peers[MAX_PEERS];
    dedicated server does not have, so names come from the auth payload and are
    remembered after a peer leaves (vehicle owners are looked up by name later). */
 static struct {uint64_t id;char name[64];} known_names[KNOWN_NAMES];static unsigned known_next;
+enum {MAX_BANS=256};
+static struct {uint64_t id;char name[64];} bans[MAX_BANS];static unsigned ban_count;static char ban_path[1024];
 static bool look_dirty;static ULONGLONG next_look;static char last_look[LOOK_MAX];
 
 static struct {
@@ -189,6 +191,20 @@ static bool parse_port(const char *value,int *output){
  if(parsed<1024)return false;
  *output=(int)parsed;return true;
 }
+static bool is_banned(uint64_t id){for(unsigned i=0;i<ban_count;i++)if(bans[i].id==id)return true;return false;}
+static void load_bans(void){
+ if(!*ban_path)return;FILE *f=fopen(ban_path,"r");if(!f)return;char line[160];
+ while(ban_count<MAX_BANS&&fgets(line,sizeof(line),f)){
+  char *end=NULL;unsigned long long id=strtoull(line,&end,10);if(!id||end==line)continue;
+  while(*end==' '||*end=='\t')end++;end[strcspn(end,"\r\n")]=0;
+  bans[ban_count].id=id;snprintf(bans[ban_count].name,64,"%.63s",end);ban_count++;
+ }
+ fclose(f);
+}
+static void save_bans(void){
+ if(!*ban_path)return;FILE *f=fopen(ban_path,"w");if(!f){report("Could not write the ban list");return;}
+ for(unsigned i=0;i<ban_count;i++)fprintf(f,"%llu %s\n",(unsigned long long)bans[i].id,bans[i].name);fclose(f);
+}
 static void configure(void){
  if(configured)return;
  configured=true;
@@ -220,6 +236,7 @@ static void configure(void){
   if(n>=8&&n<=MAX_PASSWORD){server_password_valid=true;server_password_length=n;for(DWORD i=0;i<n;i++){if(wide[i]<32||wide[i]>126){server_password_valid=false;break;}server_password[i]=(char)wide[i];}}
   SecureZeroMemory(wide,sizeof(wide));
  }
+ if(mode==MODE_SERVER){env("MOON_BAN_LIST",ban_path,sizeof(ban_path));load_bans();}
  if(mode==MODE_CLIENT&&!server_id){mode=MODE_OFF;net_phase="invalid-server-id";}
  if(game_port==query_port)ports_valid=false;
  if(mode==MODE_SERVER&&!ports_valid)net_phase="invalid-server-port";
@@ -248,7 +265,7 @@ static const char *name_of(uint64_t id){
  for(unsigned i=0;i<KNOWN_NAMES;i++)if(known_names[i].id==id&&*known_names[i].name)return known_names[i].name;
  return "Crewmate";
 }
-static bool allowed(uint64_t id){if(!id||((id>>52)&15)!=1||!server_password_valid||!allowlist_valid)return false;if(!allowlist_set)return true;for(unsigned i=0;i<allow_count;i++)if(allowlist[i]==id)return true;return false;}
+static bool allowed(uint64_t id){if(is_banned(id))return false;if(!id||((id>>52)&15)!=1||!server_password_valid||!allowlist_valid)return false;if(!allowlist_set)return true;for(unsigned i=0;i<allow_count;i++)if(allowlist[i]==id)return true;return false;}
 static bool password_matches(const AuthPayload *auth){
  /* Fixed work for every candidate, including different claimed lengths. */
  volatile uint32_t difference=(uint32_t)server_password_length^auth->password_length;
@@ -340,6 +357,7 @@ static void consume_control(uint64_t from,const ControlHeader *header,const uint
   if(!backend_ready)return;
   Peer *p=peer(from,false);
   if(header->type==AUTH_REQUEST){
+   if(is_banned(from)){send_control(from,REJECT,"You are banned from this server",30);return;}
    if(!allowed(from)||header->bytes<offsetof(AuthPayload,ticket)){send_control(from,REJECT,"Not allowed",11);return;}
    const AuthPayload *auth=(const AuthPayload *)payload;
    if(!auth->bytes||auth->bytes>MAX_TICKET||header->bytes!=offsetof(AuthPayload,ticket)+auth->bytes)return;
@@ -580,6 +598,61 @@ bool MoonNet_Install(const void *image,void (*log_line)(const char *)){
  if(!ok){phase("network-hook-failed");return false;}installed=true;
  if(mode==MODE_SERVER&&allowlist_set&&!allowlist_valid)report("Invalid MOON_ALLOWED_STEAM_IDS: all player authentication is blocked");
  phase(mode==MODE_SERVER?"server-waiting-start":"client-waiting-steam");return true;
+}
+/* Administrator commands (players, kick, ban, unban); run on the Unity thread. */
+static bool text_matches(const char *name,const char *query,bool exact){
+ size_t n=strlen(name),q=strlen(query);if(!q||q>n)return false;
+ if(exact)return n==q&&_strnicmp(name,query,q)==0;
+ for(size_t i=0;i+q<=n;i++)if(_strnicmp(name+i,query,q)==0)return true;return false;
+}
+static Peer *find_peer(const char *query,bool *ambiguous){
+ *ambiguous=false;uint64_t id=parse_id(query);
+ for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated&&id&&peers[i].id==id)return &peers[i];
+ for(unsigned pass=0;pass<2;pass++){Peer *found=NULL;unsigned matches=0;
+  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated&&text_matches(peers[i].name,query,pass==0)){found=&peers[i];matches++;}
+  if(matches==1)return found;if(matches>1){*ambiguous=true;return NULL;}}
+ return NULL;
+}
+static void command_players(void){
+ unsigned n=MoonNet_AuthenticatedPeers();char line[256];snprintf(line,sizeof(line),"Players online: %u",n);report(line);
+ for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated){snprintf(line,sizeof(line),"  %s (%llu)",peers[i].name,(unsigned long long)peers[i].id);report(line);}
+}
+static void command_kick(const char *query,bool ban){
+ char line[256];bool ambiguous=false;Peer *p=*query?find_peer(query,&ambiguous):NULL;
+ if(!*query){report(ban?"Usage: ban <player name or SteamID64>":"Usage: kick <player name or SteamID64>");return;}
+ if(!p&&ambiguous){snprintf(line,sizeof(line),"More than one player matches '%.60s'; use the SteamID64 (see 'players')",query);report(line);return;}
+ uint64_t id=p?p->id:parse_id(query);
+ if(!p&&(!id||((id>>52)&15)!=1)){snprintf(line,sizeof(line),"No player named or numbered '%.60s' is connected",query);report(line);return;}
+ if(ban&&!is_banned(id)){
+  if(ban_count>=MAX_BANS){report("Ban list is full");return;}
+  bans[ban_count].id=id;snprintf(bans[ban_count].name,64,"%s",p?p->name:name_of(id));ban_count++;save_bans();
+  snprintf(line,sizeof(line),"Banned %s (%llu)",bans[ban_count-1].name,(unsigned long long)id);report(line);
+ }
+ if(p)drop_peer(p,ban?"Banned by an administrator":"Kicked by an administrator");
+ else if(!ban)report("That player is not connected");
+}
+static void command_unban(const char *query){
+ char line[256];if(!*query){report("Usage: unban <SteamID64 or name>");return;}
+ uint64_t id=parse_id(query);
+ for(unsigned i=0;i<ban_count;i++)if((id&&bans[i].id==id)||(!id&&text_matches(bans[i].name,query,true))){
+  snprintf(line,sizeof(line),"Unbanned %s (%llu)",bans[i].name,(unsigned long long)bans[i].id);report(line);
+  memmove(&bans[i],&bans[i+1],(ban_count-i-1)*sizeof(bans[0]));ban_count--;save_bans();return;
+ }
+ snprintf(line,sizeof(line),"'%.60s' is not on the ban list",query);report(line);
+}
+bool MoonNet_Command(const char *verb,const char *arg){
+ if(mode!=MODE_SERVER)return false;
+ if(strcmp(verb,"players")==0)command_players();
+ else if(strcmp(verb,"kick")==0)command_kick(arg,false);
+ else if(strcmp(verb,"ban")==0)command_kick(arg,true);
+ else if(strcmp(verb,"unban")==0)command_unban(arg);
+ else return false;
+ return true;
+}
+bool MoonNet_PlayerAt(unsigned index,uint64_t *id,char *name,size_t size){
+ if(mode!=MODE_SERVER)return false;unsigned seen=0;
+ for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated){if(seen++==index){*id=peers[i].id;snprintf(name,size,"%s",peers[i].name);return true;}}
+ return false;
 }
 static void tick_server(void){
  if(!server_started&&!start_server())return;

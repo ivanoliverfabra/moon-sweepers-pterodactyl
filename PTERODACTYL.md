@@ -42,6 +42,25 @@ This project uses an experimental server adapter based on the upstream Moon Swee
 > new module (`scripts/package.py`, then `client/install-moon-client.ps1 -ZipPath <zip>`)
 > share their face with other players.
 
+## Console commands
+
+Type these in the panel console (names are matched case-insensitively; use the
+SteamID64 from `players` if two names are alike):
+
+| Command | Effect |
+| --- | --- |
+| `players` | Lists connected players with their SteamID64. |
+| `kick <player>` | Disconnects a player; they may rejoin. |
+| `ban <player or SteamID64>` | Disconnects and blocks a player. Bans persist in `control/bans.txt` (one `SteamID64 name` per line). |
+| `unban <player or SteamID64>` | Removes a ban. |
+| `addmoney <dollars>` | Adds to the crew's shared wallet (negative removes). Up to 2 decimal places. |
+| `setmoney <dollars>` | Sets the crew's shared wallet. |
+| `status`, `save`, `stop` | As before. |
+
+Money is one wallet shared by the whole crew. The commands use the game's own
+developer cheat path, so the host marks the amount as not earned for
+achievements, and the result is logged (`Crew money set: 100 -> 5000`).
+
 ## Logs
 
 The console shows player-facing events only, for example
@@ -159,6 +178,7 @@ variable to `0`.
 | Endpoint | Response |
 | --- | --- |
 | `GET /` | Full server state JSON (same data as the console `status` command) plus heartbeat freshness. |
+| `GET /players` | `{"count": 2, "players": ["Fabra", "Joonas"]}`: display names of connected players (no SteamIDs). `GET /` also carries the same `players` list. |
 | `GET /id` | The current `server_steam_id` as plain text. Returns `503` with an error JSON until the server finishes booting. |
 | `GET /health` | `ok`, for uptime checks. |
 | `GET /icon` | `302` redirect to the hosted icon URL, when the **Server Icon URL** variable is set. |

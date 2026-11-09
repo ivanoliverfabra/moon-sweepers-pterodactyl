@@ -47,6 +47,7 @@ typedef struct {
  Object *(__cdecl *gchandle_get_target)(uintptr_t);
  void (__cdecl *gchandle_free)(uintptr_t);
  uintptr_t (__cdecl *array_length)(Object *);
+ Object *(__cdecl *string_new)(const char *);
 } Il2Cpp;
 static Il2Cpp api;
 static const void *game_image;
@@ -64,6 +65,11 @@ static bool stop_after_save,quit_requested,save_failed;
 static ULONGLONG save_deadline;
 static void (__cdecl *original_world_initialize)(Object *,const Method *);
 static void (__cdecl *original_update)(Object *,const Method *);
+/* Money commands use the game's own cheat entry point, MoonWorld.DevAddMoney, which
+   does nothing unless MoonDevTools.Enabled; that is forced on only during our call. */
+static bool (__cdecl *original_dev_enabled)(const Method *);
+static volatile bool dev_override;
+static bool __cdecl dev_enabled_hook(const Method *info) {return dev_override||(original_dev_enabled&&original_dev_enabled(info));}
 static bool (__cdecl *original_signed)(int,const Method *);
 static bool (__cdecl *original_show)(Object *,Object *,const Method *);
 static Object *(__cdecl *unity_runtime_invoke)(const Method *,Object *,void **,Object **);
@@ -101,7 +107,12 @@ static void write_state(State q) {
  bool ready=q.steam&&q.game&&!q.loading&&q.lobby&&q.bound&&(MoonNet_IsClient()||(q.host&&q.shift))&&!MoonNet_IsStopped()&&!stop_after_save&&!save_failed;
  fprintf(f,"{\"schema\":1,\"heartbeat_unix_ms\":%llu,\"phase\":",unix_ms);json_string(f,phase);
  fprintf(f,",\"slot\":%d,\"steam\":%s,\"menu\":%s,\"in_game\":%s,\"loading\":%s,\"in_lobby\":%s,\"is_host\":%s,\"shift_started\":%s,\"world_bound\":%s,\"ready\":%s,\"error\":",host_slot,q.steam?"true":"false",q.menu?"true":"false",q.game?"true":"false",q.loading?"true":"false",q.lobby?"true":"false",q.host?"true":"false",q.shift?"true":"false",q.bound?"true":"false",ready?"true":"false");
- json_string(f,last_error);fprintf(f,",\"save_pending\":%s,\"save_failed\":%s,\"dedicated\":%s,\"client\":%s,\"server_steam_id\":\"%llu\",\"authenticated_players\":%u,\"join_transport\":\"steam\",\"network_phase\":",save_task?"true":"false",save_failed?"true":"false",MoonNet_IsDedicated()?"true":"false",MoonNet_IsClient()?"true":"false",(unsigned long long)MoonNet_ServerId(),MoonNet_AuthenticatedPeers());json_string(f,MoonNet_Phase());if(MoonNet_IsDedicated())fprintf(f,",\"game_port\":%d,\"query_port\":%d",MoonNet_GamePort(),MoonNet_QueryPort());fputs("}\n",f);fclose(f);
+ json_string(f,last_error);fprintf(f,",\"save_pending\":%s,\"save_failed\":%s,\"dedicated\":%s,\"client\":%s,\"server_steam_id\":\"%llu\",\"authenticated_players\":%u,\"join_transport\":\"steam\",\"network_phase\":",save_task?"true":"false",save_failed?"true":"false",MoonNet_IsDedicated()?"true":"false",MoonNet_IsClient()?"true":"false",(unsigned long long)MoonNet_ServerId(),MoonNet_AuthenticatedPeers());json_string(f,MoonNet_Phase());if(MoonNet_IsDedicated())fprintf(f,",\"game_port\":%d,\"query_port\":%d",MoonNet_GamePort(),MoonNet_QueryPort());if(MoonNet_IsDedicated()){
+  fputs(",\"players\":[",f);uint64_t id;char name[64];
+  for(unsigned i=0;MoonNet_PlayerAt(i,&id,name,sizeof(name));i++){if(i)fputc(',',f);fprintf(f,"{\"id\":\"%llu\",\"name\":",(unsigned long long)id);json_string(f,name);fputc('}',f);}
+  fputc(']',f);
+ }
+ fputs("}\n",f);fclose(f);
  MoveFileExA(temp,state_path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
 }
 static void env_text(const char *name,char *target,size_t capacity) {
@@ -163,7 +174,7 @@ static bool resolve_api(void) {
  API(class_from_name);API(class_get_method_from_name);API(method_get_class);API(class_get_namespace);API(class_get_field_from_name);
  API(field_get_value_object);API(field_get_value);API(runtime_invoke);API(object_unbox);API(object_get_class);
  API(string_length);API(string_chars);API(format_exception);API(thread_current);API(thread_attach);API(thread_detach);
- API(gchandle_new);API(gchandle_get_target);API(gchandle_free);API(array_length);
+ API(gchandle_new);API(gchandle_get_target);API(gchandle_free);API(array_length);API(string_new);
 #undef API
  return true;
 }
@@ -208,10 +219,56 @@ static bool task_flag(Object *task,const char *name,bool *ok) {
  const Method *m=api.class_get_method_from_name(api.object_get_class(task),name,0);
  Object *result=call(m,task,NULL,ok);return result&&*(uint8_t *)api.object_unbox(result)!=0;
 }
+static const Method *dec_parse,*dec_subtract,*dec_text_method,*world_dev_add_money,*world_wallet;
+static bool money_resolved,money_unavailable;
+static bool resolve_money(void) {
+ if(money_resolved)return true;
+ if(money_unavailable)return false;
+ void *decimal=NULL;size_t count=0;const void **assemblies=api.domain_get_assemblies(api.domain_get(),&count);
+ for(size_t i=0;i<count&&!decimal;i++)decimal=api.class_from_name(api.assembly_get_image(assemblies[i]),"System","Decimal");
+ if(decimal){dec_parse=api.class_get_method_from_name(decimal,"Parse",1);dec_subtract=api.class_get_method_from_name(decimal,"Subtract",2);dec_text_method=api.class_get_method_from_name(decimal,"ToString",0);}
+ world_dev_add_money=method("MoonWorld","DevAddMoney",2);world_wallet=method("MoonWorld","WalletDollars",1);
+ if(!dec_parse||!dec_subtract||!dec_text_method||!world_dev_add_money||!world_wallet){money_unavailable=true;note("Money commands unavailable: required game or runtime methods were not found");return false;}
+ money_resolved=true;return true;
+}
+static void decimal_text(Object *boxed,char *out,size_t size) {
+ bool ok=true;out[0]=0;Object *text=boxed?call(dec_text_method,boxed,NULL,&ok):NULL;
+ if(ok&&text)WideCharToMultiByte(CP_UTF8,0,api.string_chars(text),api.string_length(text),out,(int)size-1,NULL,NULL);
+ if(!*out)snprintf(out,size,"?");
+}
+/* Digits with an optional decimal part of at most two places; "-" only for addmoney. */
+static bool valid_amount(const char *text,bool allow_negative) {
+ size_t i=0,digits=0,fraction=0;bool dot=false;
+ if(text[0]=='-'){if(!allow_negative)return false;i++;}
+ for(;text[i];i++){
+  if(text[i]=='.'&&!dot){dot=true;continue;}
+  if(text[i]<'0'||text[i]>'9')return false;
+  if(dot)fraction++;else digits++;
+ }
+ return digits>0&&digits<=15&&fraction<=2&&strlen(text)<=24;
+}
+static void money_command(bool set,const char *arg,State q) {
+ if(!q.bound||!initialized_world){note("Money command refused: the world is not ready");return;}
+ if(!valid_amount(arg,!set)){note(set?"Usage: setmoney <dollars> (0 or more, up to 2 decimal places)":"Usage: addmoney <dollars> (negative to remove, up to 2 decimal places)");return;}
+ if(!resolve_money())return;
+ bool ok=true;Object *world=api.gchandle_get_target(initialized_world);if(!world){note("Money command refused: the world is not ready");return;}
+ Object *player=api.string_new("server");
+ void *parse_args[]={api.string_new(arg)};Object *amount=call(dec_parse,NULL,parse_args,&ok);if(!ok||!amount)return;
+ void *wallet_args[]={player};Object *before=call(world_wallet,world,wallet_args,&ok);if(!ok||!before)return;
+ Object *delta=amount;
+ if(set){void *sub_args[]={api.object_unbox(amount),api.object_unbox(before)};delta=call(dec_subtract,NULL,sub_args,&ok);if(!ok||!delta)return;}
+ dev_override=true;void *add_args[]={player,api.object_unbox(delta)};call(world_dev_add_money,world,add_args,&ok);dev_override=false;
+ if(!ok)return;
+ Object *after=call(world_wallet,world,wallet_args,&ok);
+ char was[48],now_text[48],message[160];decimal_text(before,was,sizeof(was));decimal_text(after,now_text,sizeof(now_text));
+ if(strcmp(was,now_text)==0&&strcmp(arg,"0")!=0&&strcmp(arg,"0.00")!=0&&!set)note("Crew money did not change: the game ignored the developer command");
+ else {snprintf(message,sizeof(message),"Crew money %s: %s -> %s",set?"set":"changed",was,now_text);note(message);}
+}
 static bool control_tick(State q,ULONGLONG now) {
- char command[32]={0};FILE *f=fopen(command_path,"r");
+ char command[256]={0};FILE *f=fopen(command_path,"r");
  if(f){bool read=fgets(command,sizeof(command),f)!=NULL;fclose(f);if(read&&DeleteFileA(command_path)){
   command[strcspn(command,"\r\n")]=0;
+  char *argument=strchr(command,' ');if(argument){*argument++=0;while(*argument==' ')argument++;}else argument=command+strlen(command);
   if(strcmp(command,"stop")==0||strcmp(command,"save")==0){
    if(MoonNet_IsClient())note("Host save command ignored by player client");
    else {
@@ -226,6 +283,9 @@ static bool control_tick(State q,ULONGLONG now) {
      }else if(!stop_after_save){save_failed=true;error("Save refused: no initialized world is bound");}
     }
    }
+  }else if(strcmp(command,"addmoney")==0||strcmp(command,"setmoney")==0){
+   if(MoonNet_IsClient())note("Money command ignored by player client");else money_command(command[0]=='s',argument,q);
+  }else if(!MoonNet_IsClient()&&MoonNet_Command(command,argument)){
   }else note("Unknown host command ignored");
  }}
  if(save_task){
@@ -321,6 +381,7 @@ static bool install_game_hooks(void) {
  if(success)success=(!headless||moon_install_headless_graphics(game_module,note))&&add_hook("MoonNewHire","SignedFor",1,signed_hook,(void **)&original_signed)&&add_hook("MoonLoadingScreen","Show",2,show_hook,(void **)&original_show);
  if(success)success=add_hook("MoonSteam","Update",0,update_hook,(void **)&original_update);
  if(success)success=add_hook("MoonWorld","Initialize",0,world_initialize_hook,(void **)&original_world_initialize);
+ if(success&&MoonNet_IsDedicated()&&!add_hook("MoonDevTools","get_Enabled",0,dev_enabled_hook,(void **)&original_dev_enabled))note("Money commands will not work: MoonDevTools.Enabled could not be hooked");
  if(success){InterlockedExchange(&installed,1);transition("waiting-steam");note("Game hooks installed; ordinary Steam callbacks remain active");}
  else {InterlockedExchange(&install_failed,1);transition("hook-error");write_state((State){0});}
  InterlockedExchange(&installing,0);return success;

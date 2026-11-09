@@ -269,6 +269,7 @@ else
     export MOON_HOST_LOG='Z:\data\logs\moon-host.log'
     export MOON_HOST_STATE='Z:\data\logs\moon-host-state.json'
     export MOON_HOST_COMMAND='Z:\data\control\command'
+    export MOON_BAN_LIST='Z:\data\control\bans.txt'
     touch /data/logs/moon-host.log
     tail -n 0 -F --sleep-interval=0.2 /data/logs/moon-host.log &
     moon_log_pid=$!

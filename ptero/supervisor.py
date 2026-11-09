@@ -14,6 +14,9 @@ ENTRYPOINT = "/opt/moon/bin/entrypoint"
 IMPORTER = "/opt/moon/bin/server-import"
 SYNC_GAME = "/opt/moon/ptero/sync-game.py"
 STATE_PATH = Path("/data/logs/moon-host-state.json")
+COMMAND_PATH = Path("/data/control/command")
+# Commands the game host handles itself (see native/moon_host.c control_tick).
+HOST_COMMANDS = {"addmoney", "setmoney", "players", "kick", "ban", "unban"}
 # The runner rewrites the state file on every game heartbeat, so a stale
 # heartbeat means the host process is wedged even though the file still exists.
 HEARTBEAT_FRESH_SECONDS = 15
@@ -50,6 +53,13 @@ def host_state():
     state.update(server_metadata())
     return state
 
+def player_names(state):
+    """Names of the connected players; SteamIDs stay out of the public API."""
+    players = state.get("players")
+    if not isinstance(players, list):
+        return []
+    return [p["name"] for p in players if isinstance(p, dict) and isinstance(p.get("name"), str)]
+
 class IdApiHandler(BaseHTTPRequestHandler):
     """Quiet HTTP endpoint exposing the host state and changing server ID.
 
@@ -60,8 +70,15 @@ class IdApiHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path == "/":
+            state = host_state()
+            state["players"] = player_names(state)
             self._send(200, "application/json",
-                       json.dumps(host_state(), indent=2).encode())
+                       json.dumps(state, indent=2).encode())
+        elif path == "/players":
+            state = host_state()
+            names = player_names(state)
+            self._send(200, "application/json",
+                       json.dumps({"count": len(names), "players": names}, indent=2).encode())
         elif path == "/id":
             state = host_state()
             steam_id = state.get("server_steam_id")
@@ -132,10 +149,27 @@ def start_id_api():
     thread.start()
     print(
         f"ID API listening on TCP {port}: GET / (state JSON), GET /id "
-        "(server_steam_id), GET /health, GET /icon, GET /banner, GET /motd",
+        "(server_steam_id), GET /players, GET /health, GET /icon, GET /banner, GET /motd",
         flush=True,
     )
     return server
+
+def send_host_command(line):
+    """Hand a command to the game host through its command file.
+
+    The host consumes one command per file, so wait briefly for the previous
+    one to be picked up instead of overwriting it.
+    """
+    COMMAND_PATH.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + 3
+    while COMMAND_PATH.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    if COMMAND_PATH.exists():
+        print("The server has not read the previous command yet; try again.", flush=True)
+        return
+    temporary = COMMAND_PATH.with_name(f".command-{os.getpid()}")
+    temporary.write_text(line + "\n", encoding="utf-8")
+    os.replace(temporary, COMMAND_PATH)
 
 def run_control(action):
     result = subprocess.run(
@@ -213,15 +247,24 @@ def request_stop(signum, _frame):
 
 def console():
     for raw in sys.stdin:
-        command = raw.strip().lower()
-        if command in ("", "help"):
-            print("Console commands: status, save, stop, help", flush=True)
+        line = " ".join(raw.split())
+        command = line.lower()
+        verb, _, argument = line.partition(" ")
+        verb = verb.lower()
+        if verb in HOST_COMMANDS:
+            if len(line) > 200 or not line.isprintable():
+                print("Command rejected: too long or contains control characters.", flush=True)
+            else:
+                send_host_command(f"{verb} {argument}".strip())
+        elif command in ("", "help"):
+            print("Console commands: status, save, stop, players, kick <player>, ban <player>, "
+                  "unban <player>, addmoney <amount>, setmoney <amount>, help", flush=True)
         elif command in ("status", "save"):
             run_control(command)
         elif command == "stop":
             request_stop(signal.SIGTERM, None)
         else:
-            print(f"Unknown command: {command}. Available: status, save, stop, help", flush=True)
+            print(f"Unknown command: {command}. Type help for the list.", flush=True)
 
 def main():
     global child
@@ -264,7 +307,7 @@ def main():
     if code:
         return code
 
-    print("Moon Sweepers server starting. Console commands: status, save, stop, help", flush=True)
+    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, help", flush=True)
     child = subprocess.Popen([ENTRYPOINT, "run"], cwd="/home/container", env=os.environ.copy())
     threading.Thread(target=console, daemon=True).start()
     code = child.wait()

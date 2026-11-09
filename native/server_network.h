@@ -2,6 +2,7 @@
 #define MOON_SERVER_NETWORK_H
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 /* Called by the existing loader on the Unity thread after IL2CPP initialization. */
 bool MoonNet_Requested(void);
@@ -15,6 +16,10 @@ int MoonNet_GamePort(void);
 int MoonNet_QueryPort(void);
 unsigned MoonNet_AuthenticatedPeers(void);
 const char *MoonNet_Phase(void);
+/* Administrator commands: players, kick, ban, unban. Returns false for other verbs. */
+bool MoonNet_Command(const char *verb,const char *arg);
+/* index-th authenticated player (server only). */
+bool MoonNet_PlayerAt(unsigned index,uint64_t *id,char *name,size_t size);
 
 /* Keep normal Steam.Update for clients. Dedicated mode supplies its own genuine
    GameServer callback pump. Both modes need Tick on the Unity thread. */
