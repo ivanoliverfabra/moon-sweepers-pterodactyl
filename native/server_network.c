@@ -627,8 +627,46 @@ static void watch_save(ULONGLONG now){
 static bool __cdecl send_bytes(Object *self,uint64_t to,Object *data,int bytes,int channel,bool reliable,const Method *info){
  unsigned kind=packet_kind(data);bool result=real_send_bytes(self,to,data,bytes,channel,reliable,info);packet_log(false,to,channel,kind,bytes,result);if(result)track_send(to,channel,bytes);else if(channel==2)track_failed(to,bytes);return result;
 }
+/* Preparing the world for a joiner starts from the host's own player (MoonCrewSession.local -> its world).
+   A dedicated server has no human at the keyboard, and once its player object goes away or is disabled, every
+   join is silently refused. For the instant the join starts, lend the session any player object that still has a world. */
+static void *crew_local_field,*walker_class,*walker_world_field;
+static void *(__cdecl *class_type_of)(void *);static Object *(__cdecl *type_object_of)(void *);
+static Object *find_walker(void){
+ if(!walker_class){
+  walker_class=klass("MoonWalker");walker_world_field=walker_class?il.field(walker_class,"world"):NULL;
+  FARPROC p=GetProcAddress(game_module,"il2cpp_class_get_type");memcpy(&class_type_of,&p,sizeof(p));
+  p=GetProcAddress(game_module,"il2cpp_type_get_object");memcpy(&type_object_of,&p,sizeof(p));
+ }
+ if(!walker_class||!walker_world_field||!class_type_of||!type_object_of||!core_image)return NULL;
+ const Method *find=method(il.klass(core_image,"UnityEngine","Object"),"FindObjectsByType",3);if(!find)return NULL;
+ Object *type=type_object_of(class_type_of(walker_class));if(!type)return NULL;
+ int include_inactive=1,unsorted=0;void *args[]={type,&include_inactive,&unsorted};
+ Object *array=call(find,NULL,args);if(!array)return NULL;
+ uintptr_t count=il.array_length(array);
+ for(uintptr_t i=0;i<count;i++){
+  Object *walker=*(Object **)((uint8_t *)array+il.array_header()+i*sizeof(void *));Object *world=NULL;
+  if(walker){il.field_get(walker,walker_world_field,&world);if(world)return walker;}
+ }
+ return NULL;
+}
+static bool borrow_player(Object *crew){
+ static ULONGLONG last_note;
+ if(!crew_local_field)crew_local_field=il.field(game.crew_class,"local");
+ if(!crew_local_field)return false;
+ Object *local=NULL;il.field_get(crew,crew_local_field,&local);if(local)return false;
+ ULONGLONG now=GetTickCount64();bool say=now-last_note>30000;
+ Object *walker=find_walker();
+ if(!walker){if(say){last_note=now;report("The host has no player object, so the world cannot be prepared for a joining player");}return false;}
+ il.field_set(crew,crew_local_field,walker);
+ if(say){last_note=now;report("The host's own player is missing; borrowing another player object so the world can be sent");}
+ return true;
+}
 static void __cdecl receive_transfer(Object *self,uint64_t from,Object *data,const Method *info){
- packet_log(true,from,2,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,2,packet_kind(data));real_receive_transfer(self,from,data,info);
+ packet_log(true,from,2,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,2,packet_kind(data));
+ bool borrowed=mode==MODE_SERVER&&packet_kind(data)==0x14&&borrow_player(self);
+ real_receive_transfer(self,from,data,info);
+ if(borrowed)il.field_set(self,crew_local_field,NULL);
 }
 static void __cdecl receive_world(Object *self,uint64_t from,Object *data,const Method *info){
  packet_log(true,from,1,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,1,packet_kind(data));real_receive_world(self,from,data,info);
