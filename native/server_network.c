@@ -73,7 +73,7 @@ static unsigned request_logs,failure_logs,validation_logs;static ULONGLONG next_
 static struct {int32_t id,size;} callback_shapes[32];static unsigned callback_shape_count;
 static void *sockets_api,*utils_api;
 typedef struct {uint64_t id;bool authenticated;char name[64];char look[LOOK_MAX];ULONGLONG heard;uint16_t version;
- ULONGLONG asked,first_sent,wait_logged;uint64_t sent,next_report;bool entered;} Peer;
+ ULONGLONG asked,first_sent,wait_logged,last_sent;uint64_t sent,next_report;unsigned failed;bool entered;} Peer;
 static Peer peers[MAX_PEERS];
 /* The game resolves crewmate names through the client Steam API, which the
    dedicated server does not have, so names come from the auth payload and are
@@ -537,12 +537,17 @@ static void track_send(uint64_t to,int channel,int bytes){
  if(mode!=MODE_SERVER||channel!=2)return;
  Peer *p=peer(to,false);if(!p||!p->authenticated)return;
  ULONGLONG now=GetTickCount64();char text[192];
- if(!p->first_sent){p->first_sent=now;p->next_report=4u<<20;snprintf(text,sizeof(text),"Sending the world to %s",p->name);report(text);}
- p->sent+=(uint64_t)(bytes>0?bytes:0);
+ if(!p->first_sent){p->first_sent=now;p->next_report=1u<<20;snprintf(text,sizeof(text),"Sending the world to %s",p->name);report(text);}
+ p->sent+=(uint64_t)(bytes>0?bytes:0);p->last_sent=now;
  if(p->sent>=p->next_report){
   snprintf(text,sizeof(text),"World transfer to %s: %.1f MB sent in %.0f s",p->name,(double)p->sent/1048576.0,(double)(now-p->first_sent)/1000.0);report(text);
-  while(p->next_report<=p->sent)p->next_report+=4u<<20;
+  while(p->next_report<=p->sent)p->next_report+=1u<<20;
  }
+}
+static void track_failed(uint64_t to,int bytes){
+ if(mode!=MODE_SERVER)return;
+ Peer *p=peer(to,false);if(!p||!p->authenticated)return;
+ if(p->failed++<5){char text[200];snprintf(text,sizeof(text),"A %d byte transfer message to %s could not be sent (Steam's send queue may be full)",bytes,p->name);report(text);}
 }
 /* Ordinary world messages only start once the client has the world and is in the game. */
 static void track_receive(uint64_t from,int channel,unsigned kind){
@@ -557,7 +562,7 @@ static void track_receive(uint64_t from,int channel,unsigned kind){
  }
 }
 static bool __cdecl send_bytes(Object *self,uint64_t to,Object *data,int bytes,int channel,bool reliable,const Method *info){
- unsigned kind=packet_kind(data);bool result=real_send_bytes(self,to,data,bytes,channel,reliable,info);packet_log(false,to,channel,kind,bytes,result);if(result)track_send(to,channel,bytes);return result;
+ unsigned kind=packet_kind(data);bool result=real_send_bytes(self,to,data,bytes,channel,reliable,info);packet_log(false,to,channel,kind,bytes,result);if(result)track_send(to,channel,bytes);else if(channel==2)track_failed(to,bytes);return result;
 }
 static void __cdecl receive_transfer(Object *self,uint64_t from,Object *data,const Method *info){
  packet_log(true,from,2,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,2,packet_kind(data));real_receive_transfer(self,from,data,info);
@@ -709,6 +714,22 @@ bool MoonNet_PlayerAt(unsigned index,uint64_t *id,char *name,size_t size){
  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated){if(seen++==index){*id=peers[i].id;snprintf(name,size,"%s",peers[i].name);return true;}}
  return false;
 }
+/* While a player is still downloading the world, say what Steam's connection to them is doing. */
+static ULONGLONG next_join_report;
+static void report_joins(ULONGLONG now){
+ if(now<next_join_report||!sdk.session_info||!messages_api)return;
+ next_join_report=now+5000;
+ for(unsigned i=0;i<MAX_PEERS;i++){
+  Peer *p=&peers[i];if(!p->id||!p->authenticated||!p->first_sent||p->entered)continue;
+  NetIdentity remote=identity(p->id);ConnectionInfo info;uint8_t status[256];memset(&info,0,sizeof(info));memset(status,0,sizeof(status));
+  int state=sdk.session_info(messages_api,&remote,&info,status);
+  int32_t ping,pending_reliable,unacked,send_rate;float quality,out_rate;
+  memcpy(&ping,status+4,4);memcpy(&quality,status+8,4);memcpy(&out_rate,status+20,4);memcpy(&send_rate,status+32,4);memcpy(&pending_reliable,status+40,4);memcpy(&unacked,status+44,4);
+  char text[300];snprintf(text,sizeof(text),"%s downloading: %.1f MB sent, last piece %.0f s ago, connection state %d, ping %d ms, quality %.0f%%, out %.0f KB/s, queued %d KB, unacked %d KB, %u failed sends",
+   p->name,(double)p->sent/1048576.0,(double)(now-p->last_sent)/1000.0,state,ping,quality*100.0,out_rate/1024.0,pending_reliable/1024,unacked/1024,p->failed);
+  report(text);
+ }
+}
 static void tick_server(void){
  if(!server_started&&!start_server())return;
  sdk.run_frame(server_pipe);CallbackMessage message;
@@ -718,6 +739,7 @@ static void tick_server(void){
   if(id&&!backend_ready){server_id=id;self_id=id;backend_ready=true;if(sockets_api){int result=sdk.init_auth(sockets_api);char text[128];snprintf(text,sizeof(text),"network: InitAuthentication result=%d",result);debug(text);}uint8_t yes=1;void *a[]={&id};call(game.set_steam_id,NULL,a);Object *name=il.new_string(server_name);void *b[]={name};call(game.set_persona,NULL,b);void *c[]={&yes};call(game.set_initialized,NULL,c);publish_members();if(!call(game.crew_instance,NULL,NULL))call(game.crew_create,NULL,NULL);char text[128];snprintf(text,sizeof(text),"Anonymous server SteamID: %llu",(unsigned long long)id);report(text);phase("server-authenticated-anonymous");}
  }
  transport_diagnostic();receive_control();ULONGLONG now=GetTickCount64();
+ report_joins(now);
  if(now>=next_roster){next_roster=now+5000;broadcast_roster();}
  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&now-peers[i].heard>45000)drop_peer(&peers[i],"Session timed out");
 }
