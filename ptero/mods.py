@@ -26,6 +26,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path, PurePosixPath
 
 MODS_DIR = Path("/data/mods")
@@ -40,6 +42,11 @@ MAX_MODS = 64
 MAX_FILES = 256
 
 _hashes = {}  # path -> (size, mtime_ns, sha256)
+# Reads [BepInPlugin] and assembly details from mod DLLs (modding/modinfo); built into the image.
+MODINFO = Path(os.environ.get("MOON_MODINFO", "/opt/moon/bepinex/modinfo/modinfo.dll"))
+_modinfo = {}  # sha256 -> what modinfo said about that file ({} when it isn't a .NET assembly)
+_icons = {}  # mod id -> icon file, for GET /mods/<id>/icon
+ICON_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
 
 def enabled():
@@ -172,12 +179,20 @@ def _entry(raw, index, claimed, errors):
     if missing:
         errors.append(f"{where}: missing from mods/: {', '.join(missing)}")
 
+    icon = None
+    if raw.get("icon") is not None:
+        icon = _mod_file(MODS_DIR, raw.get("icon"))
+        if icon is None or not icon.is_file() or icon.suffix.lower() not in ICON_TYPES:
+            errors.append(f"{where}: icon must be a .png, .jpg or .webp inside mods/")
+            icon = None
+
     required = raw.get("required", True)
     return {
         "id": f"nexus-{nexus['mod_id']}" if nexus else _slug(name),
         "name": name,
         "version": _text(raw.get("version"), 32),
-        "description": _text(raw.get("description"), 200),
+        "description": _text(raw.get("description"), 400),
+        "author": _text(raw.get("author"), 64),
         "required": required if isinstance(required, bool) else True,
         "nexus": nexus,
         "url": url,
@@ -186,6 +201,7 @@ def _entry(raw, index, claimed, errors):
         # Separate from `files` so launchers that predate patchers skip them instead of putting them in plugins.
         "patchers": found["patchers"],
         "missing": missing,
+        "_icon": icon,
     }
 
 
@@ -214,6 +230,15 @@ def manifest(game_port):
             suffix += 1
         seen_ids.add(entry["id"])
         mods.append(entry)
+
+    _describe_plugins(mods, errors)
+
+    _icons.clear()
+    for mod in mods:
+        icon = mod.pop("_icon") or _folder_icon(mod)
+        mod["icon"] = f"/mods/{mod['id']}/icon" if icon else None
+        if icon:
+            _icons[mod["id"]] = icon
 
     server_only = []
     for _key, label, folder in _folders():
@@ -250,6 +275,123 @@ def manifest(game_port):
     }
 
 
+def _read_modinfo(files):
+    """{sha256: details} for these DLLs ({sha256: Path}), asking modinfo only about files it hasn't seen."""
+    unseen = {sha: path for sha, path in files.items() if sha not in _modinfo}
+    dotnet = shutil.which("dotnet")
+    if unseen and dotnet and MODINFO.is_file():
+        try:
+            # Without a heap cap the .NET runtime reserves more than containers allow and gets killed.
+            env = {**os.environ, "DOTNET_GCHeapHardLimit": "0x20000000", "DOTNET_CLI_TELEMETRY_OPTOUT": "1"}
+            result = subprocess.run([dotnet, str(MODINFO), *map(str, unseen.values())],
+                                    capture_output=True, text=True, timeout=60, check=False, env=env)
+            for sha, details in zip(unseen, json.loads(result.stdout or "[]")):
+                _modinfo[sha] = details if isinstance(details, dict) and "error" not in details else {}
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return {sha: _modinfo.get(sha, {}) for sha in files}
+
+
+def _dlls(mod):
+    for key, _label, folder in _folders():
+        for record in mod[key]:
+            if record["path"].lower().endswith(".dll"):
+                yield record["sha256"], folder.joinpath(*record["path"].split("/"))
+
+
+def _describe_plugins(mods, errors):
+    """Fills in what the mods' own DLLs say: plugins (guid, name, version, dependencies), and the version, description
+    and author when mods.json leaves them out. Then works out which mods need which."""
+    info = _read_modinfo({sha: path for mod in mods for sha, path in _dlls(mod)})
+    provided = {}
+    for mod in mods:
+        plugins, assemblies = [], []
+        for sha, _path in _dlls(mod):
+            details = info.get(sha) or {}
+            if details:
+                assemblies.append(details)
+            for plugin in details.get("plugins") or []:
+                guid = _text(plugin.get("guid"), 128)
+                if not guid:
+                    continue
+                plugins.append({
+                    "kind": "patcher" if plugin.get("kind") == "patcher" else "plugin",
+                    "guid": guid,
+                    "name": _text(plugin.get("name"), 64),
+                    "version": _text(plugin.get("version"), 32),
+                    "dependencies": [
+                        {"guid": _text(d.get("guid"), 128), "soft": bool(d.get("soft"))}
+                        for d in plugin.get("dependencies") or [] if isinstance(d, dict) and d.get("guid")
+                    ][:32],
+                })
+                provided.setdefault(guid, mod["id"])
+        mod["plugins"] = plugins[:32]
+        if not mod["version"] and plugins:
+            mod["version"] = plugins[0]["version"]
+        if not mod["description"]:
+            mod["description"] = next((_text(a.get("description"), 400) for a in assemblies if a.get("description")), None)
+        if not mod["author"]:
+            for details in assemblies:
+                company = _text(details.get("company"), 64)
+                # SDK projects default the company to the assembly name; that says nothing about who made it.
+                if company and company not in (details.get("assembly"), details.get("title")):
+                    mod["author"] = company
+                    break
+
+    for mod in mods:
+        requires, unmet = set(), set()
+        for plugin in mod["plugins"]:
+            for dependency in plugin["dependencies"]:
+                owner = provided.get(dependency["guid"])
+                if owner and owner != mod["id"]:
+                    requires.add(owner)
+                elif not owner and not dependency["soft"]:
+                    unmet.add(dependency["guid"])
+        mod["requires"] = sorted(requires)
+        mod["missing_dependencies"] = sorted(unmet)
+        for guid in sorted(unmet):
+            errors.append(f"mods.json mod '{mod['name']}' needs plugin {guid}, which no listed mod provides")
+        if mod["required"]:
+            for owner in sorted(requires):
+                other = next(m for m in mods if m["id"] == owner)
+                if not other["required"]:
+                    errors.append(f"mods.json mod '{mod['name']}' needs '{other['name']}', which is only optional")
+
+
+def _folder_icon(mod):
+    """An icon.png (or .jpg/.webp) next to the mod's files, e.g. plugins/DustSilo/icon.png."""
+    for key, _label, folder in _folders():
+        for record in mod[key]:
+            parent = folder.joinpath(*record["path"].split("/")).parent
+            if parent == folder:
+                continue
+            for suffix in ICON_TYPES:
+                candidate = parent / f"icon{suffix}"
+                if candidate.is_file():
+                    return candidate
+    return None
+
+
+def icon(mod_id):
+    """(bytes, content type) of a mod's icon, or None."""
+    path = _icons.get(mod_id)
+    if path is None or not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+        return None
+    return path.read_bytes(), ICON_TYPES[path.suffix.lower()]
+
+
+def plugin_names(paths):
+    """{path: plugin name} for DLLs that declare one, used to name mods `mod adopt` creates."""
+    files = {_sha256(path): path for path in paths if path.suffix.lower() == ".dll" and path.is_file()}
+    names = {}
+    for sha, details in _read_modinfo(files).items():
+        for plugin in details.get("plugins") or []:
+            if plugin.get("name"):
+                names[files[sha]] = {"name": plugin["name"], "version": plugin.get("version")}
+                break
+    return names
+
+
 def summary(game_port):
     """The short form included in GET /."""
     full = manifest(game_port)
@@ -269,6 +411,7 @@ def describe(game_port):
         lines.append("No mods are listed in /home/container/mods/mods.json.")
     for mod in full["mods"]:
         version = f" {mod['version']}" if mod["version"] else ""
+        version += f" by {mod['author']}" if mod.get("author") else ""
         need = "required" if mod["required"] else "optional"
         patchers = f", {len(mod['patchers'])} patcher(s)" if mod["patchers"] else ""
         lines.append(f"  {mod['name']}{version} ({need}, {len(mod['files'])} plugin file(s){patchers})")

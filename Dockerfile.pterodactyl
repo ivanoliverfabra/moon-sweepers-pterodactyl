@@ -35,7 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends unzip git \
 COPY modding /modding
 RUN sed -i 's/\r$//' /modding/build-bepinex.sh \
     && bash /modding/build-bepinex.sh prepare /out/bepinex \
-    && cp /modding/build-bepinex.sh /out/bepinex/build-bepinex.sh
+    && cp /modding/build-bepinex.sh /out/bepinex/build-bepinex.sh \
+    && dotnet publish /modding/modinfo -c Release -v quiet -nologo -o /out/bepinex/modinfo
 
 FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive

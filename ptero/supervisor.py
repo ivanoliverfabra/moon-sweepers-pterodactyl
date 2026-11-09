@@ -106,6 +106,22 @@ class IdApiHandler(BaseHTTPRequestHandler):
         elif path == "/mods":
             self._send(200, "application/json",
                        json.dumps(mods.manifest(game_port()), indent=2).encode())
+        elif path.startswith("/mods/") and path.endswith("/icon"):
+            mod_id = path[len("/mods/"):-len("/icon")]
+            found = None
+            if mod_id.replace("-", "").isalnum() and len(mod_id) <= 64:
+                mods.manifest(game_port())  # refreshes which file each mod's icon is
+                found = mods.icon(mod_id)
+            if found:
+                body, content_type = found
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "max-age=300")
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self._send(404, "text/plain", b"not found")
         elif path == "/id":
             state = host_state()
             steam_id = state.get("server_steam_id")

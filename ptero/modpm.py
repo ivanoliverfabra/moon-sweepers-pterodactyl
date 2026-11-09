@@ -124,15 +124,21 @@ def _layout(archive, fallback_name):
     if sum(m.file_size for m in members) > MAX_UNPACKED:
         raise ValueError("The archive unpacks to more than 1 GB, which is too big for a mod.")
 
-    name, version = fallback_name, None
+    name, about = fallback_name, {}
     for member in members:
-        if member.filename.lower() in ("manifest.json",):
+        lowered = member.filename.lower()
+        if lowered == "manifest.json":
             try:
                 info = json.loads(archive.read(member).decode("utf-8-sig"))
                 name = str(info.get("name") or name).replace("_", " ")[:64]
-                version = str(info.get("version_number") or "")[:32] or None
+                about["version"] = str(info.get("version_number") or "")[:32] or None
+                about["description"] = str(info.get("description") or "")[:400] or None
+                website = str(info.get("website_url") or "")
+                about["link"] = website[:1024] if website.startswith("https://") else None
             except (ValueError, UnicodeDecodeError, AttributeError):
                 pass
+        elif lowered in ("icon.png", "icon.jpg", "icon.webp") and member.file_size <= 2 * 1024 * 1024:
+            about["icon"] = (member, lowered.rsplit(".", 1)[1])
 
     parts_of = {m: _safe_parts(m.filename) for m in members}
     if any(parts is None for parts in parts_of.values()):
@@ -162,7 +168,7 @@ def _layout(archive, fallback_name):
             placed.append((member, "plugins", "/".join((folder,) + tuple(parts[strip:]))))
     if not placed:
         raise ValueError("The archive doesn't contain any mod files.")
-    return placed, name, version
+    return placed, name, about
 
 
 def _guess_name(url, filename):
@@ -182,13 +188,18 @@ def install(url, name=None):
         say(f"Downloading {url} ...")
         filename = _download(url, download)
         guessed = name or _guess_name(url, filename)
-        version = None
+        about = {}
 
         if zipfile.is_zipfile(download):
             with zipfile.ZipFile(download) as archive:
-                placed, found_name, version = _layout(archive, guessed)
+                placed, found_name, about = _layout(archive, guessed)
                 if not name:
                     guessed = found_name
+                if about.get("icon"):
+                    member, extension = about["icon"]
+                    icon = work / f"icon.{extension}"
+                    icon.write_bytes(archive.read(member))
+                    about["icon"] = icon
                 staged = []
                 for member, folder, relative in placed:
                     target = work / "staged" / folder / relative
@@ -230,8 +241,16 @@ def install(url, name=None):
             if not entry["files"]:
                 entry.pop("files")
             entry["url"] = url
-            if version:
-                entry["version"] = version
+            for key in ("version", "description", "link"):
+                if about.get(key) and not (key == "link" and entry.get("link")):
+                    entry[key] = about[key]
+            if about.get("icon"):
+                # Kept with the other mod icons, so the launcher can show it.
+                icons = mods.MODS_DIR / "icons"
+                icons.mkdir(parents=True, exist_ok=True)
+                target = icons / f"{mods._slug(entry['name'])}{about['icon'].suffix}"
+                shutil.copyfile(about["icon"], target)
+                entry["icon"] = f"icons/{target.name}"
             _save(data)
 
     count = len(staged)
@@ -255,6 +274,9 @@ def remove(query):
         data = _load()
         entry = _find(data, query)
         _delete_files(entry)
+        icon = mods._mod_file(mods.MODS_DIR, entry.get("icon")) if entry.get("icon") else None
+        if icon is not None and icon.is_file() and icon.parent.name == "icons":
+            icon.unlink()
         data["mods"].remove(entry)
         _save(data)
     say(f"Removed {entry['name']}. Restart the server to unload it.")
@@ -280,13 +302,25 @@ def adopt():
                 groups.setdefault(group, {"files": [], "patchers": []})[
                     "files" if label == "plugins" else "patchers"].append(relative)
         names = {e.get("name", "").lower() for e in data["mods"] if isinstance(e, dict)}
+        # Name each group after the plugin its DLLs declare ("Moon Framework" rather than "MoonFramework").
+        declared = mods.plugin_names([
+            folder.joinpath(*relative.split("/"))
+            for files in groups.values()
+            for key, _label, folder in mods._folders()
+            for relative in files["files" if key == "files" else "patchers"]
+        ])
         added = []
         for group, files in sorted(groups.items()):
-            name = group[:64]
+            paths = [folder.joinpath(*relative.split("/"))
+                     for key, _label, folder in mods._folders()
+                     for relative in files["files" if key == "files" else "patchers"]]
+            plugin = next((declared[path] for path in paths if path in declared), None)
+            name = (plugin["name"] if plugin else group)[:64]
             if name.lower() in names:
                 name = f"{name} ({len(added) + 2})"
             entry = {"name": name, "required": True}
             entry.update({k: v for k, v in files.items() if v})
+            names.add(name.lower())
             data["mods"].append(entry)
             added.append(name)
         if added:
