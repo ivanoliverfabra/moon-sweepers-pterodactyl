@@ -1,22 +1,68 @@
-# Moon Sweepers dedicated server for Ubuntu
+# Moon Sweepers dedicated server
 
-An unofficial Docker server for Ubuntu on Intel/AMD. The host runs without a GPU,
-uses a genuine anonymous Steam GameServer identity, and keeps the world in a
-persistent volume. You and your friend use your two existing licensed Steam
-accounts. A third playing account and a Steam desktop on the server are unnecessary.
+An unofficial dedicated server for Moon Sweepers. It runs the real Windows game headless under Wine, on a CPU-only
+Linux host, with a genuine anonymous Steam GameServer identity. Players join with their own licensed Steam accounts
+and a join password; nobody needs a third account or a Steam desktop on the server.
 
-**Supported game:** Moon Sweepers 1.0.5, Steam build 26317497. All playing PCs need
-this release's small client module. The installers check the game build and refuse
-to overwrite a different mod's `version.dll`.
+**Supported game:** Moon Sweepers 1.0.5, Steam build 26317497. Every player needs the matching client module (the
+[launcher](https://github.com/ivanoliverfabra/moon-sweepers-launcher) installs it for them).
+
+This is an unofficial, experimental adapter, not affiliated with or supported by the game's developers. You supply
+your own game files; none are included.
+
+## Ways to run it
+
+| | Guide | Good for |
+| --- | --- | --- |
+| **Pterodactyl / Calagopus egg** | [PTERODACTYL.md](PTERODACTYL.md) | Game panels. Downloads the game from the Moon Sweepers API, BepInEx mods, modpacks by token, a server console with mod commands, an ID API the launcher reads (status, players, icon, banner, mods, required versions). |
+| **Ubuntu with Docker Compose** | below, and [SERVER.md](SERVER.md) | A box you run yourself, with your own copy of the game folder. |
+
+What both do:
+
+- Run the world with `-batchmode`/`-nographics` and keep saves, backups and logs in a persistent volume. A clean stop
+  saves first and archives the save (ten kept by default).
+- Check Steam tickets and game ownership before anyone joins, then the server's join password. An optional SteamID
+  allowlist restricts it further.
+- Connect over Steam P2P/relay: no inbound ports to open. Players join by the server's current Steam ID, which can
+  change when it restarts.
+
+The Pterodactyl image adds, among other things:
+
+- **Mods:** BepInEx 6, built with the fixes this game needs (see [modding/README.md](modding/README.md)). Mods live in
+  `mods/` and are described in `mods/mods.json`; the server reads each mod's DLLs for its name, version, plugins and
+  dependencies, and tells launchers exactly which files players need.
+- **Modpacks:** set **Modpack Token** to a pack from the Moon Sweepers registry and the server installs it on every
+  start, including the game version it pins.
+- **Required versions:** the server reports its game build and the client release players need (**Client Version**),
+  and launchers only allow Play with exactly those.
+
+## Players
+
+The easy way is the [Moon Sweepers Launcher](https://github.com/ivanoliverfabra/moon-sweepers-launcher): add the
+server's address, and it installs the right game and client module, gets the server's mods, and joins with the
+current Steam ID. Without the launcher, install the client module by hand as described under
+[Connect each Windows player](#connect-each-windows-player).
+
+## Documentation
+
+| File | What's in it |
+| --- | --- |
+| [PTERODACTYL.md](PTERODACTYL.md) | The egg: setup, variables, folders, console commands, the ID API, mods and modpacks, SpaceWar mode |
+| [SERVER.md](SERVER.md) | The full Ubuntu guide: copying the game, settings, backups, networking, troubleshooting |
+| [modding/README.md](modding/README.md) | How BepInEx is built for this game, and the bundle the launcher installs |
+| [native/README.md](native/README.md) | The native server and client module, and how to build them |
+| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | Third-party attribution |
+
+## Status
 
 **Tested:** a real licensed Steam client joined the CPU-only Ubuntu container,
 loaded its world, moved, and swept dust. The server saved the changed terrain.
 Fresh installation, clean Docker shutdown, automatic backup, and restoration after
 restart also passed. Password checks pass automated tests; the new password prompt
 still needs a live client connection test. Two simultaneous playing clients have
-not yet been tested. This is an unofficial experimental adapter.
+not yet been tested.
 
-## Install on Ubuntu
+## Install on Ubuntu with Docker Compose
 
 Copy this project and your owned Windows game folder to your server. Then, from
 the project directory:
@@ -122,7 +168,4 @@ a save archive in `/data/backups`, with ten retained by default. The `server-dat
 volume stores saves, backups, logs, imported game files, and the Wine prefix.
 Export backups to another disk. Avoid `down -v` when keeping the world.
 
-Development details are in [native/README.md](native/README.md).
-Third-party attribution is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-Running under Pterodactyl or Calagopus (egg, image, ID API, SpaceWar mode): see [PTERODACTYL.md](PTERODACTYL.md).
+See [SERVER.md](SERVER.md) for backups, restoring and troubleshooting.
