@@ -10,6 +10,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import modpm
 import mods
 
 ENTRYPOINT = "/opt/moon/bin/entrypoint"
@@ -283,11 +284,16 @@ def console():
                 send_host_command(f"{verb} {argument}".strip())
         elif command in ("", "help"):
             print("Console commands: status, save, stop, players, kick <player>, ban <player>, "
-                  "unban <player>, addmoney <amount>, setmoney <amount>, mods, help", flush=True)
+                  "unban <player>, addmoney <amount>, setmoney <amount>, mods, mod help, help", flush=True)
         elif command in ("status", "save"):
             run_control(command)
         elif command == "mods":
             print(mods.describe(game_port()), flush=True)
+        elif verb == "mod":
+            if len(line) > 1200 or not line.isprintable():
+                print("Command rejected: too long or contains control characters.", flush=True)
+            else:
+                modpm.run_in_background(argument)
         elif command == "stop":
             request_stop(signal.SIGTERM, None)
         else:
@@ -334,7 +340,7 @@ def main():
     if code:
         return code
 
-    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, mods, help", flush=True)
+    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, mods, mod, help", flush=True)
     child = subprocess.Popen([ENTRYPOINT, "run"], cwd="/home/container", env=os.environ.copy())
     threading.Thread(target=console, daemon=True).start()
     code = child.wait()

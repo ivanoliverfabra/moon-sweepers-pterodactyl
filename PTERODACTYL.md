@@ -94,9 +94,28 @@ assemblies with its own Cpp2IL, which cannot read this game. The startup script 
 Setting `MOON_BEPINEX=0` removes BepInEx's loader (`winhttp.dll`) from the game folder and leaves your mods in
 place.
 
+### Managing mods from the console
+
+The `mod` command installs mods and keeps `mods.json` up to date for you:
+
+| Command | What it does |
+| --- | --- |
+| `mod install <url> [name]` | Downloads a `.zip` or `.dll` (https only), puts plugins in `mods/plugins` and patchers in `mods/patchers`, and adds the mod to `mods.json` as required. The same link becomes the mod's download, so players' launchers fetch exactly the same files. Thunderstore packages and `BepInEx/plugins/...` archives are understood; anything else is kept together in a folder named after the mod. |
+| `mod update <name>` | Installs the mod again from its link, replacing its old files. |
+| `mod remove <name>` | Deletes the mod's files and its `mods.json` entry. |
+| `mod adopt` | Adds `mods.json` entries for files you uploaded yourself: each folder in `mods/plugins` becomes one mod, loose files are grouped by name (`MoonFramework.dll` and `MoonFramework.xml` together), and each patcher becomes its own mod. All are marked required. |
+| `mod require <name>`, `mod optional <name>` | Whether players must have it. |
+| `mod link <name> <page url>` | The page players are sent to for the download (a GitHub release, Thunderstore, ...). |
+| `mod url <name> <download url>`, `mod nexus <name> <mod id> [file id]`, `mod version <name> <version>` | Set the other fields. |
+| `mod list` | Same as `mods`: what's installed and what players need. |
+
+A unique part of a name is enough (`mod remove dust`). Restart the server after installing or removing mods so
+BepInEx loads the change.
+
 ### Telling players which mods they need
 
-List the mods players must also have in `/home/container/mods/mods.json`:
+`mod install` and `mod adopt` write this file for you; you can also edit it by hand. List the mods players must also
+have in `/home/container/mods/mods.json`:
 
 ```json
 {
@@ -106,6 +125,7 @@ List the mods players must also have in `/home/container/mods/mods.json`:
       "version": "1.2.0",
       "required": true,
       "files": ["BiggerVacuum.dll"],
+      "patchers": ["BiggerVacuum.Patcher.dll"],
       "nexus": { "mod_id": 12, "file_id": 34 },
       "url": "https://example.com/BiggerVacuum-1.2.0.zip"
     }
@@ -117,13 +137,17 @@ Each entry takes these fields:
 
 - **`files`:** paths inside `mods/plugins` that belong to the mod. The server adds each file's size and SHA-256, so
   the launcher installs exactly those files.
+- **`patchers`:** optional paths inside `mods/patchers` for BepInEx preloader patchers. The launcher installs them
+  into the game's `BepInEx/patchers`. A mod can have only patchers and no `files`.
 - **`required`:** defaults to `true`. Set it to `false` for mods players may skip.
 - **`nexus`:** the numbers from the mod's Nexus Mods page,
   `nexusmods.com/moonsweepers/mods/<mod_id>?tab=files&file_id=<file_id>`. The launcher uses them to download the
   mod.
-- **`url`:** an optional direct download, either a `.zip` or a `.dll`.
+- **`url`:** an optional direct download, either a `.zip` or a `.dll`. The launcher downloads it with one click.
+- **`link`:** an optional page where players get the mod. The launcher opens it and installs the file as soon as it
+  lands in their Downloads folder.
 
-Plugin files that no entry lists count as server-only: players don't need them.
+Files in `mods/plugins` or `mods/patchers` that no entry lists count as server-only: players don't need them.
 
 The ID API serves the manifest at `GET /mods`, and `GET /` includes a short `mods` summary. Type `mods` in the
 console to check the manifest; problems such as a missing file are listed there as warnings.
@@ -237,7 +261,7 @@ variable to `0`.
 | --- | --- |
 | `GET /` | Full server state JSON (same data as the console `status` command) plus heartbeat freshness. |
 | `GET /players` | `{"count": 2, "players": ["Fabra", "Joonas"], "entries": [{"name": "Fabra", "steam_id": "76561198074424621"}, ...]}`: `players` is the display names, `entries` pairs each name with its SteamID64 (a string). `GET /` carries both: `players` (names) and `player_entries` (the same records as `entries`), so a launcher needs one request. |
-| `GET /mods` | The mod manifest: `enabled` (`MOON_BEPINEX`), `hash` (changes whenever the files players need change), `mods` (each with `id`, `name`, `version`, `required`, `nexus`, `url` and `files` with `path`, `size` and `sha256`), `server_only` files and `errors` in `mods.json`. `GET /` carries a short `mods` summary (`enabled`, `count`, `required`, `hash`). See [Telling players which mods they need](#telling-players-which-mods-they-need). |
+| `GET /mods` | The mod manifest: `enabled` (`MOON_BEPINEX`), `hash` (changes whenever the files players need change), `mods` (each with `id`, `name`, `version`, `required`, `nexus`, `url`, and `files` and `patchers` with `path`, `size` and `sha256`), `server_only` files (each with its `folder`) and `errors` in `mods.json`. `GET /` carries a short `mods` summary (`enabled`, `count`, `required`, `hash`). See [Telling players which mods they need](#telling-players-which-mods-they-need). |
 | `GET /id` | The current `server_steam_id` as plain text. Returns `503` with an error JSON until the server finishes booting. |
 | `GET /health` | `ok`, for uptime checks. |
 | `GET /icon` | `302` redirect to the hosted icon URL, when the **Server Icon URL** variable is set. |

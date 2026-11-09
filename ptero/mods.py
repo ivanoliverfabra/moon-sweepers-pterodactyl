@@ -9,15 +9,18 @@ Operators describe their mods in /data/mods/mods.json (see PTERODACTYL.md):
           "version": "1.2.0",
           "required": true,
           "files": ["BiggerVacuum.dll"],
+          "patchers": ["BiggerVacuum.Patcher.dll"],
           "nexus": {"mod_id": 12, "file_id": 34},
-          "url": "https://example.com/BiggerVacuum-1.2.0.zip"
+          "url": "https://example.com/BiggerVacuum-1.2.0.zip",
+          "link": "https://github.com/example/BiggerVacuum/releases"
         }
       ]
     }
 
-`files` are paths inside /data/mods/plugins. The server adds each file's size and SHA-256, so a launcher can tell
-exactly which files a player needs. Plugin files that no entry lists are reported as server-only: they run on the
-server but players don't need them.
+`files` are paths inside /data/mods/plugins, and the optional `patchers` are BepInEx preloader patchers inside
+/data/mods/patchers. The server adds each file's size and SHA-256, so a launcher can tell exactly which files a player
+needs. Files in either folder that no entry lists are reported as server-only: they run on the server but players
+don't need them.
 """
 import hashlib
 import json
@@ -27,6 +30,7 @@ from pathlib import Path, PurePosixPath
 
 MODS_DIR = Path("/data/mods")
 PLUGINS_DIR = MODS_DIR / "plugins"
+PATCHERS_DIR = MODS_DIR / "patchers"
 MANIFEST_PATH = MODS_DIR / "mods.json"
 # Nexus Mods game domain: https://www.nexusmods.com/games/moonsweepers
 NEXUS_GAME = "moonsweepers"
@@ -38,6 +42,11 @@ _hashes = {}  # path -> (size, mtime_ns, sha256)
 
 def enabled():
     return os.environ.get("MOON_BEPINEX", "0").strip() == "1"
+
+
+def _folders():
+    """(mods.json key, folder name, path). Looked up on each call so tests can point the paths elsewhere."""
+    return (("files", "plugins", PLUGINS_DIR), ("patchers", "patchers", PATCHERS_DIR))
 
 
 def _sha256(path):
@@ -60,15 +69,15 @@ def _text(value, limit):
     return value[:limit] or None
 
 
-def _plugin_file(relative):
-    """A plugins/ file named by a manifest entry, or None if the path is unsafe."""
+def _mod_file(folder, relative):
+    """A file inside `folder` named by a manifest entry, or None if the path is unsafe."""
     if not isinstance(relative, str) or not relative or len(relative) > 260 or "\\" in relative:
         return None
     path = PurePosixPath(relative)
     if path.is_absolute() or ".." in path.parts or not path.parts:
         return None
-    full = PLUGINS_DIR.joinpath(*path.parts)
-    root = PLUGINS_DIR.resolve()
+    full = folder.joinpath(*path.parts)
+    root = folder.resolve()
     try:
         resolved = full.resolve()
     except OSError:
@@ -78,8 +87,11 @@ def _plugin_file(relative):
     return full
 
 
-def _file_record(relative, full):
-    return {"path": relative, "size": full.stat().st_size, "sha256": _sha256(full)}
+def _file_record(relative, full, folder=None):
+    record = {"path": relative, "size": full.stat().st_size, "sha256": _sha256(full)}
+    if folder:
+        record["folder"] = folder
+    return record
 
 
 def _slug(text):
@@ -116,27 +128,38 @@ def _entry(raw, index, claimed, errors):
     if url and not url.lower().startswith(("https://", "http://")):
         errors.append(f"{where}: url must start with https://")
         url = None
+    # The page players are sent to for the download (a release page, Thunderstore, ...).
+    link = _text(raw.get("link"), 1024)
+    if link and not link.lower().startswith("https://"):
+        errors.append(f"{where}: link must start with https://")
+        link = None
 
-    files, missing = [], []
-    listed = raw.get("files")
-    if not isinstance(listed, list) or not listed:
+    found, missing = {"files": [], "patchers": []}, []
+    for key, label, folder in _folders():
+        listed = raw.get(key)
+        if listed is None:
+            continue
+        if not isinstance(listed, list):
+            errors.append(f"{where}: {key} must be a list of paths")
+            continue
+        for relative in listed[:MAX_FILES]:
+            full = _mod_file(folder, relative)
+            if full is None:
+                errors.append(f"{where}: {relative!r} is not a path inside mods/{label}")
+                continue
+            claim = f"{label}/{relative}"
+            if claim in claimed:
+                errors.append(f"{where}: {claim} is already listed by '{claimed[claim]}'")
+                continue
+            claimed[claim] = name
+            if full.is_file():
+                found[key].append(_file_record(relative, full))
+            else:
+                missing.append(claim)
+    if not found["files"] and not found["patchers"] and not missing:
         errors.append(f"{where} lists no files")
-        listed = []
-    for relative in listed[:MAX_FILES]:
-        full = _plugin_file(relative)
-        if full is None:
-            errors.append(f"{where}: {relative!r} is not a path inside mods/plugins")
-            continue
-        if relative in claimed:
-            errors.append(f"{where}: {relative} is already listed by '{claimed[relative]}'")
-            continue
-        claimed[relative] = name
-        if full.is_file():
-            files.append(_file_record(relative, full))
-        else:
-            missing.append(relative)
     if missing:
-        errors.append(f"{where}: missing from mods/plugins: {', '.join(missing)}")
+        errors.append(f"{where}: missing from mods/: {', '.join(missing)}")
 
     required = raw.get("required", True)
     return {
@@ -147,7 +170,10 @@ def _entry(raw, index, claimed, errors):
         "required": required if isinstance(required, bool) else True,
         "nexus": nexus,
         "url": url,
-        "files": files,
+        "link": link,
+        "files": found["files"],
+        # Separate from `files` so launchers that predate patchers skip them instead of putting them in plugins.
+        "patchers": found["patchers"],
         "missing": missing,
     }
 
@@ -169,7 +195,7 @@ def manifest(game_port):
     seen_ids = set()
     for index, item in enumerate(entries[:MAX_MODS]):
         entry = _entry(item, index, claimed, errors)
-        if entry is None or not entry["files"]:
+        if entry is None or not (entry["files"] or entry["patchers"]):
             continue  # nothing a player could match; the reason is in errors
         base, suffix = entry["id"], 2
         while entry["id"] in seen_ids:
@@ -179,20 +205,27 @@ def manifest(game_port):
         mods.append(entry)
 
     server_only = []
-    if PLUGINS_DIR.is_dir():
-        for full in sorted(PLUGINS_DIR.rglob("*")):
+    for _key, label, folder in _folders():
+        if not folder.is_dir():
+            continue
+        for full in sorted(folder.rglob("*")):
             if len(server_only) >= MAX_FILES:
                 break
             if not full.is_file():
                 continue
-            relative = full.relative_to(PLUGINS_DIR).as_posix()
-            if relative not in claimed:
-                server_only.append(_file_record(relative, full))
+            relative = full.relative_to(folder).as_posix()
+            if f"{label}/{relative}" not in claimed:
+                server_only.append(_file_record(relative, full, label))
 
     # One value that changes whenever the set of files players must have changes.
-    digest = hashlib.sha256()
-    for line in sorted(f"{f['path']}\t{f['sha256']}" for m in mods if m["required"] for f in m["files"]):
-        digest.update(line.encode() + b"\n")
+    lines = sorted(
+        f"{label}/{record['path']}:{record['sha256']}"
+        for mod in mods
+        if mod["required"]
+        for key, label, _folder in _folders()
+        for record in mod[key]
+    )
+    digest = hashlib.sha256("\n".join(lines).encode())
 
     return {
         "schema": 1,
@@ -226,8 +259,10 @@ def describe(game_port):
     for mod in full["mods"]:
         version = f" {mod['version']}" if mod["version"] else ""
         need = "required" if mod["required"] else "optional"
-        lines.append(f"  {mod['name']}{version} ({need}, {len(mod['files'])} file(s))")
+        patchers = f", {len(mod['patchers'])} patcher(s)" if mod["patchers"] else ""
+        lines.append(f"  {mod['name']}{version} ({need}, {len(mod['files'])} plugin file(s){patchers})")
     if full["server_only"]:
-        lines.append(f"  {len(full['server_only'])} server-only file(s) in mods/plugins that players don't need")
+        lines.append(f"  {len(full['server_only'])} server-only file(s) that players don't need:")
+        lines.extend(f"    {f['folder']}/{f['path']}" for f in full["server_only"][:20])
     lines.extend(f"Warning: {error}" for error in full["errors"])
     return "\n".join(lines)
