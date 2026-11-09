@@ -650,11 +650,18 @@ static Object *find_walker(void){
  }
  return NULL;
 }
+/* A destroyed Unity object is still a valid managed reference; the game's own checks treat it as null, so must we. */
+static bool unity_alive(Object *o){
+ if(!o||!core_image)return false;
+ const Method *check=method(il.klass(core_image,"UnityEngine","Object"),"op_Implicit",1);if(!check)return true;
+ void *args[]={o};Object *result=call(check,NULL,args);return result&&*(uint8_t *)il.unbox(result)!=0;
+}
+static const char *object_state(Object *o){return !o?"none":unity_alive(o)?"ok":"destroyed";}
 static bool borrow_player(Object *crew){
  static ULONGLONG last_note;
  if(!crew_local_field)crew_local_field=il.field(game.crew_class,"local");
  if(!crew_local_field)return false;
- Object *local=NULL;il.field_get(crew,crew_local_field,&local);if(local)return false;
+ Object *local=NULL;il.field_get(crew,crew_local_field,&local);if(unity_alive(local))return false;
  ULONGLONG now=GetTickCount64();bool say=now-last_note>30000;
  Object *walker=find_walker();
  if(!walker){if(say){last_note=now;report("The host has no player object, so the world cannot be prepared for a joining player");}return false;}
@@ -662,11 +669,37 @@ static bool borrow_player(Object *crew){
  if(say){last_note=now;report("The host's own player is missing; borrowing another player object so the world can be sent");}
  return true;
 }
+/* When a join request does not start a world save, say which of the game's preconditions failed. */
+static bool static_flag(const char *type,const char *getter){
+ const Method *m=method(klass(type),getter,0);if(!m)return false;
+ Object *result=call(m,NULL,NULL);return result&&*(uint8_t *)il.unbox(result)!=0;
+}
+static bool already_serving(Object *crew,uint64_t sender){
+ void *field=il.field(game.crew_class,"sending");Object *set=NULL;if(!field)return false;il.field_get(crew,field,&set);if(!set)return false;
+ const Method *contains=method(il.object_class(set),"Contains",1);if(!contains)return false;
+ void *args[]={&sender};Object *result=call(contains,set,args);return result&&*(uint8_t *)il.unbox(result)!=0;
+}
+static void explain_refusal(Object *crew,uint64_t sender){
+ static ULONGLONG last_note;ULONGLONG now=GetTickCount64();if(now-last_note<10000)return;last_note=now;
+ Object *local=NULL,*world=NULL,*terrain=NULL;const char *folder="unknown";
+ if(crew_local_field)il.field_get(crew,crew_local_field,&local);
+ if(unity_alive(local)&&walker_world_field)il.field_get(local,walker_world_field,&world);
+ if(unity_alive(world)){
+  void *world_class=il.object_class(world);void *terrain_field=il.field(world_class,"<Terrain>k__BackingField");
+  if(terrain_field)il.field_get(world,terrain_field,&terrain);
+  const Method *dir=method(world_class,"get_SaveDirectory",0);Object *text=dir?call(dir,world,NULL):NULL;
+  folder=text&&il.string_length(text)>0?"ok":"empty";
+ }
+ char line[400];snprintf(line,sizeof(line),"The host did not start a world save for a joining player (host player: %s, its world: %s, terrain: %s, save folder: %s, steam ready: %s, host joined elsewhere: %s, already sending to them: %s)",object_state(local),object_state(world),object_state(terrain),folder,static_flag("MoonSteam","get_Initialized")?"yes":"no",static_flag("MoonCrew","get_Joined")?"yes":"no",already_serving(crew,sender)?"yes":"no");report(line);
+}
 static void __cdecl receive_transfer(Object *self,uint64_t from,Object *data,const Method *info){
  packet_log(true,from,2,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,2,packet_kind(data));
- bool borrowed=mode==MODE_SERVER&&packet_kind(data)==0x14&&borrow_player(self);
+ bool ask=mode==MODE_SERVER&&packet_kind(data)==0x14;
+ ULONGLONG saved_before=save_started;
+ bool borrowed=ask&&borrow_player(self);
  real_receive_transfer(self,from,data,info);
  if(borrowed)il.field_set(self,crew_local_field,NULL);
+ if(ask&&save_started==saved_before)explain_refusal(self,from);
 }
 static void __cdecl receive_world(Object *self,uint64_t from,Object *data,const Method *info){
  packet_log(true,from,1,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,1,packet_kind(data));real_receive_world(self,from,data,info);
