@@ -145,7 +145,7 @@ static void (__cdecl *real_receive_world)(Object *,uint64_t,Object *,const Metho
 static unsigned packet_logs[2][3];
 static struct {
  void *lobby_class,*member_class,*crew_class,*join_class;
- void *list_field,*member_id,*member_name,*member_look,*member_ready,*member_host,*member_local;
+ void *list_field,*changed_field,*member_id,*member_name,*member_look,*member_ready,*member_host,*member_local;
  const Method *steam_initialized,*set_initialized,*set_steam_id,*set_persona,*crew_create,*crew_instance;
  const Method *session_start,*in_menu,*newhire_active,*begin_join,*join_ctor,*persona,*look_local,*look_encode;
  Object *member_list;const Method *list_clear,*list_add;
@@ -296,13 +296,24 @@ static void add_member(uint64_t id,const char *name,const char *look_text){
  set_member_field(o,game.member_ready,&yes);set_member_field(o,game.member_host,&host);set_member_field(o,game.member_local,&local);
  void *args[]={o};call(game.list_add,game.member_list,args);
 }
+/* Remote players redraw their astronaut when MoonSteamLobby.Changed fires. The real
+   lobby raises it after every member refresh; the adapter's roster has to do the same,
+   otherwise a look that arrives after the player spawned is never shown. */
+static bool notifying;
+static void notify_changed(void){
+ if(mode!=MODE_CLIENT||notifying||!game.changed_field)return;
+ Object *action=NULL;il.static_get(game.changed_field,&action);if(!action)return;
+ const Method *invoke=method(il.object_class(action),"Invoke",0);
+ notifying=true;call(invoke,action,NULL);notifying=false;
+}
 static void publish_members(void){
  if(mode==MODE_SERVER?!backend_ready:!client_connected)return;
  if(!game.member_list)return;
  uint64_t hash=1469598103934665603ULL^server_id^self_id;
  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated){hash=(hash^peers[i].id)*1099511628211ULL;for(const unsigned char *s=(const unsigned char *)peers[i].name;*s;s++)hash=(hash^*s)*1099511628211ULL;for(const unsigned char *s=(const unsigned char *)peers[i].look;*s;s++)hash=(hash^*s)*1099511628211ULL;}
  /* A roster heartbeat must not invalidate suspended C# list enumerators. */
- if(hash!=published_roster_hash){
+ bool roster_changed=hash!=published_roster_hash;
+ if(roster_changed){
   call(game.list_clear,game.member_list,NULL);add_member(server_id,server_name,"");
   for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated)add_member(peers[i].id,peers[i].name,peers[i].look);
   published_roster_hash=hash;
@@ -310,6 +321,7 @@ static void publish_members(void){
  set_u64("lobby",server_id);set_u64("<HostId>k__BackingField",server_id);
  set_bool("<IsHost>k__BackingField",mode==MODE_SERVER);set_bool("<ShiftStarted>k__BackingField",true);set_bool("<Busy>k__BackingField",false);
  int privacy=2;static_value("<CurrentPrivacy>k__BackingField",&privacy);set_string("<CrewName>k__BackingField",server_name);set_string("<Status>k__BackingField","");set_bool("<StatusIsError>k__BackingField",false);
+ if(roster_changed)notify_changed();
 }
 static void clear_members(void){if(game.member_list)call(game.list_clear,game.member_list,NULL);published_roster_hash=0;set_u64("lobby",0);set_u64("<HostId>k__BackingField",0);set_bool("<ShiftStarted>k__BackingField",false);set_bool("<IsHost>k__BackingField",false);}
 /* Version-2 clients (before look relaying) are still served in their own wire format. */
@@ -559,7 +571,7 @@ static bool resolve_game(void){
  game.crew_class=klass("MoonCrewSession");
  {void *(__cdecl *nested)(void *,void **)=NULL;const char *(__cdecl *name)(void *)=NULL;FARPROC p=GetProcAddress(game_module,"il2cpp_class_get_nested_types");memcpy(&nested,&p,sizeof(p));p=GetProcAddress(game_module,"il2cpp_class_get_name");memcpy(&name,&p,sizeof(p));if(!nested||!name)return false;void *it=NULL,*k;while((k=nested(game.crew_class,&it))!=NULL)if(strcmp(name(k),"CrewJoin")==0){game.join_class=k;break;}}
  if(!game.lobby_class||!game.member_class||!game.crew_class||!game.join_class)return false;
- il.class_init(game.lobby_class);game.list_field=il.field(game.lobby_class,"members");if(!game.list_field)return false;il.static_get(game.list_field,&game.member_list);if(!game.member_list)return false;
+ il.class_init(game.lobby_class);game.list_field=il.field(game.lobby_class,"members");game.changed_field=il.field(game.lobby_class,"Changed");if(!game.list_field)return false;il.static_get(game.list_field,&game.member_list);if(!game.member_list)return false;
  void *list_class=il.object_class(game.member_list);game.list_clear=method(list_class,"Clear",0);game.list_add=method(list_class,"Add",1);
 #define FIELD(member,name) do{game.member=il.field(game.member_class,name);if(!game.member)return false;}while(0)
  FIELD(member_id,"id");FIELD(member_name,"name");FIELD(member_look,"look");FIELD(member_ready,"ready");FIELD(member_host,"host");FIELD(member_local,"local");

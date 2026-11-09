@@ -179,7 +179,7 @@ variable to `0`.
 | Endpoint | Response |
 | --- | --- |
 | `GET /` | Full server state JSON (same data as the console `status` command) plus heartbeat freshness. |
-| `GET /players` | `{"count": 2, "players": ["Fabra", "Joonas"]}`: display names of connected players (no SteamIDs). `GET /` also carries the same `players` list. |
+| `GET /players` | `{"count": 2, "players": ["Fabra", "Joonas"], "entries": [{"name": "Fabra", "steam_id": "76561198074424621"}, ...]}`: `players` is the display names, `entries` pairs each name with its SteamID64 (a string). `GET /` carries the names list only. |
 | `GET /id` | The current `server_steam_id` as plain text. Returns `503` with an error JSON until the server finishes booting. |
 | `GET /health` | `ok`, for uptime checks. |
 | `GET /icon` | `302` redirect to the hosted icon URL, when the **Server Icon URL** variable is set. |

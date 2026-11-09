@@ -53,12 +53,19 @@ def host_state():
     state.update(server_metadata())
     return state
 
-def player_names(state):
-    """Names of the connected players; SteamIDs stay out of the public API."""
+def player_entries(state):
+    """Connected players as {"name", "steam_id"} records."""
     players = state.get("players")
     if not isinstance(players, list):
         return []
-    return [p["name"] for p in players if isinstance(p, dict) and isinstance(p.get("name"), str)]
+    return [
+        {"name": p["name"], "steam_id": str(p.get("id", ""))}
+        for p in players
+        if isinstance(p, dict) and isinstance(p.get("name"), str)
+    ]
+
+def player_names(state):
+    return [entry["name"] for entry in player_entries(state)]
 
 class IdApiHandler(BaseHTTPRequestHandler):
     """Quiet HTTP endpoint exposing the host state and changing server ID.
@@ -76,9 +83,13 @@ class IdApiHandler(BaseHTTPRequestHandler):
                        json.dumps(state, indent=2).encode())
         elif path == "/players":
             state = host_state()
-            names = player_names(state)
+            entries = player_entries(state)
             self._send(200, "application/json",
-                       json.dumps({"count": len(names), "players": names}, indent=2).encode())
+                       json.dumps({
+                           "count": len(entries),
+                           "players": [entry["name"] for entry in entries],
+                           "entries": entries,
+                       }, indent=2).encode())
         elif path == "/id":
             state = host_state()
             steam_id = state.get("server_steam_id")
