@@ -4,9 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - Dockerfile
+      - Dockerfile.pterodactyl
       - ptero/**
-      - .github/workflows/publish.yml
+      - native/**
+      - container/server/**
+      - .github/workflows/publish-pterodactyl.yml
   workflow_dispatch:
 
 permissions:
@@ -28,12 +30,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Normalize image name
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        # The egg pulls this fixed image name regardless of the repository name.
+        run: echo "name=ghcr.io/ivanoliverfabra/moon-sweepers-pterodactyl" >> "$GITHUB_OUTPUT"
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: Dockerfile.pterodactyl
           platforms: linux/amd64
           push: true
           tags: |

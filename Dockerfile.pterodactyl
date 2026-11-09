@@ -1,32 +1,24 @@
 # syntax=docker/dockerfile:1.7
-ARG UPSTREAM_REF=5132f8a5e755da84b3eb62279f32c951badf972d
+# Pterodactyl/Calagopus runtime for the Moon Sweepers dedicated server.
+# Build from the repository root: docker build -f Dockerfile.pterodactyl .
 
 FROM ubuntu:24.04 AS build
-ARG UPSTREAM_REF
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git tar gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
+    ca-certificates curl tar gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
-RUN git init /src \
-    && git -C /src remote add origin https://github.com/hexonMD/moon-sweepers-dedicated-server.git \
-    && git -C /src fetch --depth 1 origin "${UPSTREAM_REF}" \
-    && git -C /src checkout --detach FETCH_HEAD
-# Make the Steam AppId/GameId runtime-configurable (5335510 retail, 480
-# SpaceWar for online-fix clients) instead of hardcoding the retail AppId.
-COPY ptero/patches/spacewar.patch /tmp/spacewar.patch
-RUN git -C /src apply --check /tmp/spacewar.patch \
-    && git -C /src apply /tmp/spacewar.patch
+COPY container/server/steam-probe.c /src/steam-probe.c
 RUN mkdir -p /out \
     && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Werror \
        -Wno-cast-function-type -static-libgcc \
-       /src/container/server/steam-probe.c -o /out/steam-probe.exe
+       /src/steam-probe.c -o /out/steam-probe.exe
 ARG MINHOOK_COMMIT=c3fcafdc10146beb5919319d0683e44e3c30d537
 RUN mkdir -p /native \
     && curl --fail --location --retry 3 \
        "https://github.com/TsudaKageyu/minhook/archive/${MINHOOK_COMMIT}.tar.gz" \
-       | tar -xz --strip-components=1 -C /native \
-    && cp -a /src/native/. /native/host/ \
-    && cd /native \
+       | tar -xz --strip-components=1 -C /native
+COPY native/*.c native/*.h native/*.S native/*.def /native/host/
+RUN cd /native \
     && x86_64-w64-mingw32-gcc -shared -O2 -Wall -Wextra -Werror \
        -Iinclude -Isrc -Ihost host/*.c host/version_proxy.S host/version.def \
        src/buffer.c src/hook.c src/trampoline.c src/hde/hde64.c \
@@ -58,11 +50,11 @@ RUN mkdir -p /home/container/game-source /opt/moon/bin /opt/moon/mod \
              /opt/moon/ptero /import \
     && ln -s /home/container /data \
     && ln -s /home/container/game-source /import/game
-COPY --from=build /src/container/server/entrypoint /opt/moon/bin/entrypoint
-COPY --from=build /src/container/server/steam-redist /opt/moon/bin/steam-redist
-COPY --from=build /src/container/server/server-import /opt/moon/bin/server-import
-COPY --from=build /src/container/server/health.py /opt/moon/bin/health.py
-COPY --from=build /src/container/server/redist-lock.json /opt/moon/bin/redist-lock.json
+COPY container/server/entrypoint /opt/moon/bin/entrypoint
+COPY container/server/steam-redist /opt/moon/bin/steam-redist
+COPY container/server/server-import /opt/moon/bin/server-import
+COPY container/server/health.py /opt/moon/bin/health.py
+COPY container/server/redist-lock.json /opt/moon/bin/redist-lock.json
 COPY --from=build /out/steam-probe.exe /opt/moon/bin/steam-probe.exe
 COPY --from=build /out/version.dll /opt/moon/mod/version.dll
 COPY --from=build /out/MinHook-LICENSE.txt /opt/moon/mod/MinHook-LICENSE.txt
@@ -72,6 +64,8 @@ COPY ptero/install.sh /opt/moon/ptero/install.sh
 COPY ptero/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh /opt/moon/ptero/install.sh \
               /opt/moon/ptero/supervisor.py /opt/moon/ptero/sync-game.py \
+              /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
+              /opt/moon/bin/server-import \
     && chmod 755 /opt/moon/bin/entrypoint /opt/moon/bin/steam-redist \
               /opt/moon/bin/server-import /opt/moon/ptero/install.sh \
               /entrypoint.sh \

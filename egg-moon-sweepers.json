@@ -149,6 +149,16 @@
       "field_type": "text"
     },
     {
+      "name": "Network Debug Log",
+      "description": "1 adds low-level Steam transport and packet lines to the console log. Leave 0 for the normal player join/leave log.",
+      "env_variable": "MOON_NET_DEBUG",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|in:0,1",
+      "field_type": "text"
+    },
+    {
       "name": "Timezone",
       "description": "Timezone used for timestamps, e.g. America/New_York or UTC.",
       "env_variable": "TZ",
