@@ -58,7 +58,7 @@ static ULONGLONG client_last_heard,client_auth_started,next_server_start,next_ba
 static const char *net_phase="off";
 static void (*logger)(const char *);
 static HMODULE game_module,steam_module;
-static const void *game_image,*steam_image;
+static const void *game_image,*steam_image,*core_image;
 static void *server_api,*messages_api,*user_api;
 static int32_t server_pipe;
 static char server_name[64]="Moon Sweepers Dedicated";
@@ -95,6 +95,7 @@ static struct {
  Object *(__cdecl *new_object)(void *);Object *(__cdecl *new_string)(const char *);
  void *(__cdecl *object_class)(Object *);void *(__cdecl *unbox)(Object *);
  void (__cdecl *class_init)(void *);uint32_t (__cdecl *array_header)(void);
+ uintptr_t (__cdecl *gc_new)(Object *,bool);Object *(__cdecl *gc_target)(uintptr_t);void (__cdecl *gc_free)(uintptr_t);
  uintptr_t (__cdecl *array_length)(Object *);int (__cdecl *string_length)(Object *);
  const wchar_t *(__cdecl *string_chars)(Object *);void (__cdecl *exception)(Object *,char *,int);
 } il;
@@ -141,6 +142,8 @@ static struct {
 } marshal;
 static bool (__cdecl *real_next_callback)(int32_t,CallbackMessage *);
 static void (__cdecl *real_steam_destroy)(Object *,const Method *);
+static void (__cdecl *real_log_callback)(Object *,Object *,int,bool,const Method *);
+static Object *(__cdecl *real_save_progress)(Object *,const Method *);
 static bool (__cdecl *real_send_bytes)(Object *,uint64_t,Object *,int,int,bool,const Method *);
 static void (__cdecl *real_receive_transfer)(Object *,uint64_t,Object *,const Method *);
 static void (__cdecl *real_receive_world)(Object *,uint64_t,Object *,const Method *);
@@ -561,6 +564,65 @@ static void track_receive(uint64_t from,int channel,unsigned kind){
   p->entered=true;snprintf(text,sizeof(text),"%s entered the world (%.0f s after asking, %.1f MB sent)",p->name,(double)(now-p->asked)/1000.0,(double)p->sent/1048576.0);report(text);
  }
 }
+/* The Unity player log is discarded (it repeats every exception and grows without bound), so errors the
+   game raises are mirrored to the console once each, with a count when they repeat. */
+enum {LOG_KINDS=64,LOG_TEXT=240};
+static struct {uint32_t hash;unsigned count,reported;ULONGLONG last;} log_seen[LOG_KINDS];static unsigned log_kinds;static volatile LONG log_busy;
+static void wide_line(Object *text,char *out,size_t size,int max_chars){
+ out[0]=0;if(!text)return;int n=il.string_length(text);if(n<=0)return;if(n>max_chars)n=max_chars;
+ int bytes=WideCharToMultiByte(CP_UTF8,0,il.string_chars(text),n,out,(int)size-1,NULL,NULL);out[bytes>0?bytes:0]=0;
+ for(char *c=out;*c;c++)if((unsigned char)*c<32)*c=' ';
+}
+static void __cdecl log_callback(Object *text,Object *stack,int type,bool main_thread,const Method *info){
+ real_log_callback(text,stack,type,main_thread,info);
+ /* Error, Assert and Exception only; never let logging itself get in the way of the game. */
+ if(mode!=MODE_SERVER||(type!=0&&type!=1&&type!=4))return;
+ if(InterlockedCompareExchange(&log_busy,1,0)!=0)return;
+ char message[LOG_TEXT],where[160];wide_line(text,message,sizeof(message),LOG_TEXT);wide_line(stack,where,sizeof(where),150);
+ uint32_t hash=2166136261u;for(const unsigned char *c=(const unsigned char *)message;*c;c++)hash=(hash^*c)*16777619u;
+ ULONGLONG now=GetTickCount64();unsigned slot=LOG_KINDS;
+ for(unsigned i=0;i<log_kinds;i++)if(log_seen[i].hash==hash){slot=i;break;}
+ char line[LOG_TEXT+200];bool say=false;
+ if(slot==LOG_KINDS&&log_kinds<LOG_KINDS){slot=log_kinds++;log_seen[slot].hash=hash;log_seen[slot].last=now;say=true;}
+ if(slot<LOG_KINDS){log_seen[slot].count++;if(!say&&now-log_seen[slot].last>=60000&&log_seen[slot].count>log_seen[slot].reported+1){log_seen[slot].last=now;say=true;}}
+ if(say){
+  unsigned extra=slot<LOG_KINDS?log_seen[slot].count-1-log_seen[slot].reported:0;if(slot<LOG_KINDS)log_seen[slot].reported=log_seen[slot].count-1;
+  if(extra)snprintf(line,sizeof(line),"Game error (seen %u more times): %s | %s",extra,message,where);else snprintf(line,sizeof(line),"Game error: %s | %s",message,where);
+  report(line);
+ }
+ InterlockedExchange(&log_busy,0);
+}
+/* Every join starts with a world save on the host; say how long it takes and whether it fails. */
+static uintptr_t save_task;static ULONGLONG save_started;static bool save_slow_said;
+static bool task_flag(Object *task,const char *name){
+ const Method *m=method(il.object_class(task),name,0);if(!m)return false;
+ Object *exception=NULL;Object *result=il.invoke(m,task,NULL,&exception);return !exception&&result&&*(uint8_t *)il.unbox(result)!=0;
+}
+static Object *__cdecl save_progress_hook(Object *self,const Method *info){
+ Object *task=real_save_progress(self,info);
+ if(mode==MODE_SERVER&&task){
+  if(save_task)il.gc_free(save_task);
+  save_task=il.gc_new(task,false);save_started=GetTickCount64();save_slow_said=false;report("World save started");
+ }
+ return task;
+}
+static void watch_save(ULONGLONG now){
+ if(!save_task)return;
+ Object *task=il.gc_target(save_task);
+ if(!task){il.gc_free(save_task);save_task=0;return;}
+ char text[400];
+ if(task_flag(task,"get_IsFaulted")||task_flag(task,"get_IsCanceled")){
+  char detail[300]={0};const Method *get=method(il.object_class(task),"get_Exception",0);Object *error=get?il.invoke(get,task,NULL,&(Object *){NULL}):NULL;
+  if(error)il.exception(error,detail,sizeof(detail));for(char *c=detail;*c;c++)if((unsigned char)*c<32)*c=' ';
+  snprintf(text,sizeof(text),"World save failed after %.1f s: %s",(double)(now-save_started)/1000.0,detail);report(text);
+  il.gc_free(save_task);save_task=0;
+ }else if(task_flag(task,"get_IsCompleted")){
+  snprintf(text,sizeof(text),"World save finished in %.1f s",(double)(now-save_started)/1000.0);report(text);
+  il.gc_free(save_task);save_task=0;
+ }else if(!save_slow_said&&now-save_started>10000){
+  save_slow_said=true;report("World save has not finished after 10 s; players trying to join will wait");
+ }
+}
 static bool __cdecl send_bytes(Object *self,uint64_t to,Object *data,int bytes,int channel,bool reliable,const Method *info){
  unsigned kind=packet_kind(data);bool result=real_send_bytes(self,to,data,bytes,channel,reliable,info);packet_log(false,to,channel,kind,bytes,result);if(result)track_send(to,channel,bytes);else if(channel==2)track_failed(to,bytes);return result;
 }
@@ -585,7 +647,7 @@ static bool hook_method(void *k,const char *name,int argc,void *replacement,void
 static bool load_apis(void){
  game_module=GetModuleHandleW(L"GameAssembly.dll");if(!game_module)return false;
 #define IL(member,name) do{FARPROC p=GetProcAddress(game_module,"il2cpp_" name);memcpy(&il.member,&p,sizeof(p));if(!il.member){report("Missing il2cpp_" name);return false;}}while(0)
- IL(assemblies,"domain_get_assemblies");IL(domain,"domain_get");IL(image,"assembly_get_image");IL(image_name,"image_get_name");IL(klass,"class_from_name");IL(method,"class_get_method_from_name");IL(field,"class_get_field_from_name");IL(field_get,"field_get_value");IL(field_set,"field_set_value");IL(static_get,"field_static_get_value");IL(static_set,"field_static_set_value");IL(invoke,"runtime_invoke");IL(new_object,"object_new");IL(new_string,"string_new");IL(object_class,"object_get_class");IL(unbox,"object_unbox");IL(class_init,"runtime_class_init");IL(array_header,"array_object_header_size");IL(array_length,"array_length");IL(string_length,"string_length");IL(string_chars,"string_chars");IL(exception,"format_exception");
+ IL(assemblies,"domain_get_assemblies");IL(domain,"domain_get");IL(image,"assembly_get_image");IL(image_name,"image_get_name");IL(klass,"class_from_name");IL(method,"class_get_method_from_name");IL(field,"class_get_field_from_name");IL(field_get,"field_get_value");IL(field_set,"field_set_value");IL(static_get,"field_static_get_value");IL(static_set,"field_static_set_value");IL(invoke,"runtime_invoke");IL(new_object,"object_new");IL(new_string,"string_new");IL(object_class,"object_get_class");IL(unbox,"object_unbox");IL(class_init,"runtime_class_init");IL(gc_new,"gchandle_new");IL(gc_target,"gchandle_get_target");IL(gc_free,"gchandle_free");IL(array_header,"array_object_header_size");IL(array_length,"array_length");IL(string_length,"string_length");IL(string_chars,"string_chars");IL(exception,"format_exception");
 #undef IL
  steam_module=GetModuleHandleW(L"steam_api64.dll");
  if(!steam_module){wchar_t path[2048];GetModuleFileNameW(NULL,path,2048);wchar_t *slash=wcsrchr(path,L'\\');if(!slash)return false;wcscpy(slash+1,L"MoonSweepers_Data\\Plugins\\x86_64\\steam_api64.dll");steam_module=LoadLibraryW(path);}
@@ -600,7 +662,7 @@ static bool load_apis(void){
  {FARPROC p=GetProcAddress(steam_module,"SteamAPI_ISteamNetworkingUtils_SetConfigValue");memcpy(&sdk.set_config,&p,sizeof(p));}
  {FARPROC p=GetProcAddress(steam_module,"SteamAPI_ISteamNetworkingUtils_GetConfigValue");memcpy(&sdk.get_config,&p,sizeof(p));}
  size_t count=0;const void **assemblies=il.assemblies(il.domain(),&count);
- for(size_t i=0;i<count;i++){const void *image=il.image(assemblies[i]);if(strcmp(il.image_name(image),"com.rlabrecque.steamworks.net.dll")==0)steam_image=image;}
+ for(size_t i=0;i<count;i++){const void *image=il.image(assemblies[i]);if(strcmp(il.image_name(image),"com.rlabrecque.steamworks.net.dll")==0)steam_image=image;if(strcmp(il.image_name(image),"UnityEngine.CoreModule.dll")==0)core_image=image;}
  return steam_image!=NULL;
 }
 static bool resolve_game(void){
@@ -647,6 +709,8 @@ bool MoonNet_Install(const void *image,void (*log_line)(const char *)){
   HOOK(network,"SendMessageToUser",5,net_send);HOOK(network,"ReceiveMessagesOnChannel",3,net_receive);HOOK(network,"AcceptSessionWithUser",1,net_accept);HOOK(network,"CloseSessionWithUser",1,net_close);HOOK(network,"CloseChannelWithUser",2,net_close_channel);HOOK(network,"GetSessionConnectionInfo",3,net_info);
   HOOK(il.klass(steam_image,"Steamworks","SteamUser"),"GetSteamID",0,server_steam_id);
   HOOK(game.lobby_class,"Avatar",1,no_avatar);HOOK(game.lobby_class,"PlayerName",1,player_name);
+  {void *world=klass("MoonWorld");if(!hook_method(world,"SaveProgress",0,save_progress_hook,(void **)&real_save_progress))report("World save monitoring is unavailable");}
+  if(core_image){void *application=il.klass(core_image,"UnityEngine","Application");if(!hook_method(application,"CallLogCallback",4,log_callback,(void **)&real_log_callback))report("Game error logging is unavailable");}
   if(!hook_method(klass("MoonSteam"),"OnDestroy",0,steam_destroy,(void **)&real_steam_destroy))ok=false;
  }else{
   MH_STATUS h=MH_CreateHook((void *)sdk.next_callback,observe_callback,(void **)&real_next_callback);if(h!=MH_OK||MH_EnableHook((void *)sdk.next_callback)!=MH_OK)ok=false;
@@ -739,7 +803,7 @@ static void tick_server(void){
   if(id&&!backend_ready){server_id=id;self_id=id;backend_ready=true;if(sockets_api){int result=sdk.init_auth(sockets_api);char text[128];snprintf(text,sizeof(text),"network: InitAuthentication result=%d",result);debug(text);}uint8_t yes=1;void *a[]={&id};call(game.set_steam_id,NULL,a);Object *name=il.new_string(server_name);void *b[]={name};call(game.set_persona,NULL,b);void *c[]={&yes};call(game.set_initialized,NULL,c);publish_members();if(!call(game.crew_instance,NULL,NULL))call(game.crew_create,NULL,NULL);char text[128];snprintf(text,sizeof(text),"Anonymous server SteamID: %llu",(unsigned long long)id);report(text);phase("server-authenticated-anonymous");}
  }
  transport_diagnostic();receive_control();ULONGLONG now=GetTickCount64();
- report_joins(now);
+ report_joins(now);watch_save(now);
  if(now>=next_roster){next_roster=now+5000;broadcast_roster();}
  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&now-peers[i].heard>45000)drop_peer(&peers[i],"Session timed out");
 }
