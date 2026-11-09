@@ -169,6 +169,26 @@
       "field_type": "text"
     },
     {
+      "name": "Game API URL",
+      "description": "Moon Sweepers API the server downloads the game from when game-source is empty. Needs Server Key too; leave either empty to upload the game yourself.",
+      "env_variable": "MOON_GAME_API_URL",
+      "default_value": "https://ms-api.olivr.cc",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Server Key",
+      "description": "The API's SERVER_KEY. Lets this server download the game from the Game API URL. Keep it secret.",
+      "env_variable": "MOON_SERVER_KEY",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:256",
+      "field_type": "text"
+    },
+    {
       "name": "Timezone",
       "description": "Timezone used for timestamps, e.g. America/New_York or UTC.",
       "env_variable": "TZ",

@@ -10,6 +10,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import game_download
 import modpm
 import mods
 
@@ -302,15 +303,17 @@ def console():
 def main():
     global child
     game = Path("/home/container/game-source")
-    required = ("MoonSweepers.exe", "GameAssembly.dll", "UnityPlayer.dll", "MoonSweepers_Data")
-    missing = [name for name in required if not (game / name).exists()]
+    # With Game API URL and Server Key set, an empty game-source is filled from the API.
+    game_download.install(game)
+    missing = [name for name in game_download.REQUIRED if not (game / name).exists()]
     if missing:
-        print("Upload the CONTENTS of your Moon Sweepers 1.0.5 game folder to /home/container/game-source/ using SFTP.", flush=True)
-        print("Missing: " + ", ".join(missing), flush=True)
+        print("The game isn't installed. Either set Game API URL and Server Key so the server downloads it, or "
+              "upload the CONTENTS of your Moon Sweepers 1.0.5 game folder to game-source/ using SFTP.", flush=True)
+        print("Missing from game-source: " + ", ".join(missing), flush=True)
         return 1
 
     os.environ.setdefault("WINEARCH", "win64")
-    os.environ.setdefault("WINEPREFIX", "/home/container/wineprefix")
+    os.environ.setdefault("WINEPREFIX", "/data/wineprefix")
     os.environ.setdefault("WINEDEBUG", "-all")
     os.environ.setdefault("DISPLAY", ":99")
     os.environ.setdefault("SteamAppId", "5335510")

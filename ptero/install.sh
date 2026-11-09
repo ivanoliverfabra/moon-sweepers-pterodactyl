@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The folders the panel shows. Everything the server manages itself goes in .runtime/ (see layout.sh, which also
+# moves the folders of servers set up before this layout when they next start).
 ROOT=/mnt/server
 mkdir -p \
   "$ROOT/game-source" \
-  "$ROOT/backups" \
+  "$ROOT/mods" \
   "$ROOT/logs" \
-  "$ROOT/control" \
-  "$ROOT/probe"
+  "$ROOT/backups" \
+  "$ROOT/.runtime/home"
 
 echo "Moon Sweepers Pterodactyl files initialized."
-echo "Upload the CONTENTS of your Moon Sweepers 1.0.5 installation to:"
+echo "Either set Game API URL and Server Key so the server downloads the game itself on its first start,"
+echo "or upload the CONTENTS of your Moon Sweepers 1.0.5 installation to:"
 echo "  /mnt/server/game-source/"
 echo "Do not upload the parent folder as an extra nested directory."
 echo "Required entries: MoonSweepers.exe, GameAssembly.dll, UnityPlayer.dll, MoonSweepers_Data/"

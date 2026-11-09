@@ -29,13 +29,33 @@ This project uses an experimental server adapter based on the upstream Moon Swee
 3. Create a server from the egg. Set **Server Password** (8-128 printable
    ASCII characters, required). Allocate one port: the ID API listens on the
    TCP side of the primary allocation.
-4. After the install step finishes, upload the **contents** of your Moon
-   Sweepers 1.0.5 game folder to `game-source/` over SFTP (not the parent
-   folder), then start the server. The first start imports and validates the
-   game; the egg marks the server running when the host reports `world-bound`.
+4. Get the game onto the server, one of two ways:
+   - **Download it from the API:** set **Game API URL** (default `https://ms-api.olivr.cc`) and **Server Key** (the
+     API's `SERVER_KEY`). On its first start, the server downloads the game archive, checks its SHA-256 and unpacks
+     it into `game-source/` by itself. Set **MOON_GAME_FILE** only if the API lists more than one archive.
+   - **Upload it:** after the install step finishes, upload the **contents** of your Moon Sweepers 1.0.5 game folder
+     to `game-source/` over SFTP (not the parent folder).
+
+   Then start the server. The first start imports and validates the game; the egg marks the server running when the
+   host reports `world-bound`.
 5. Console commands: `status`, `save`, `stop`, `help`. Stopping (or the panel's
    stop signal, `^C`) saves the world gracefully and keeps backups
    (`MOON_BACKUP_KEEP`).
+
+## Server files
+
+The panel's file manager shows only what you work with:
+
+| Folder | What's in it |
+| --- | --- |
+| `game-source/` | The game: uploaded by you, or downloaded from the API. |
+| `mods/` | BepInEx plugins, patchers, configs and `mods.json` (see [Mods](#mods-bepinex)). |
+| `logs/` | `moon-host.log` and the other logs. |
+| `backups/` | World backups made when the server stops. |
+| `.runtime/` | Everything the server manages itself: the imported game, the Wine prefix (with the world saves), Steam files, the BepInEx cache, caches. You shouldn't need to touch it. |
+
+Servers set up before this layout had all of those folders at the top. On its next start the server moves them into
+`.runtime/` by itself and says so in the console; nothing is deleted or overwritten.
 
 > **Compatibility:** the server accepts both the previous client module (protocol v2) and
 > the current one (v3). Existing clients keep joining without changes; only clients on the
@@ -79,7 +99,7 @@ described in `modding/README.md`. Mods are off by default. To turn them on:
 1. Set **Enable BepInEx Mods** (`MOON_BEPINEX=1`) and restart.
 2. Wait for the first start after enabling. It prints `Preparing BepInEx for this game build`, and takes about a
    minute while it generates interop assemblies for the imported `GameAssembly.dll`. The result is cached in
-   `/home/container/bepinex-cache` and only rebuilt when the game changes.
+   `/home/container/.runtime/bepinex-cache` and only rebuilt when the game changes.
 3. Upload plugin `.dll` files to `/home/container/mods/plugins` and restart. Use `mods/patchers` for preloader
    patchers. Plugin configs and `BepInEx.cfg` are in `mods/config`.
 
@@ -91,7 +111,7 @@ game update) prints `restart the game once`: restart the server one more time so
 assemblies.
 
 The console shows BepInEx's plugin loading, warnings and errors, prefixed with `BepInEx:`. The full log is
-`/home/container/game/BepInEx/LogOutput.log`.
+`/home/container/.runtime/game/BepInEx/LogOutput.log`.
 
 Leave `UpdateInteropAssemblies = false` in `BepInEx.cfg`. If you change it, BepInEx tries to rebuild the interop
 assemblies with its own Cpp2IL, which cannot read this game. The startup script sets it back.
