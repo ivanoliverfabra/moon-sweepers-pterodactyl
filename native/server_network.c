@@ -72,7 +72,8 @@ static int control_results[8]={-999,-999,-999,-999,-999,-999,-999,-999},last_aut
 static unsigned request_logs,failure_logs,validation_logs;static ULONGLONG next_diagnostic;
 static struct {int32_t id,size;} callback_shapes[32];static unsigned callback_shape_count;
 static void *sockets_api,*utils_api;
-typedef struct {uint64_t id;bool authenticated;char name[64];char look[LOOK_MAX];ULONGLONG heard;uint16_t version;} Peer;
+typedef struct {uint64_t id;bool authenticated;char name[64];char look[LOOK_MAX];ULONGLONG heard;uint16_t version;
+ ULONGLONG asked,first_sent,wait_logged;uint64_t sent,next_report;bool entered;} Peer;
 static Peer peers[MAX_PEERS];
 /* The game resolves crewmate names through the client Steam API, which the
    dedicated server does not have, so names come from the auth payload and are
@@ -124,6 +125,7 @@ static struct {
  uint32_t (__cdecl *auth_ticket)(void *,void *,int,uint32_t *,const NetIdentity *);
  void (__cdecl *cancel_ticket)(void *,uint32_t);
  bool (__cdecl *set_config)(void *,int,int,intptr_t,int,const void *);
+ int (__cdecl *get_config)(void *,int,int,intptr_t,int *,void *,size_t *);
 } sdk;
 /* These are IL2CPP-generated P/Invoke marshal stubs, resolved from this game's
    Steamworks.NativeMethods. Managed identities contain arrays, and managed out
@@ -167,6 +169,14 @@ static void tune_network(void *utils,bool server){
  if(!server)return;
  sdk.set_config(utils,SEND_BUFFER,GLOBAL_SCOPE,0,INT32,&buffer);sdk.set_config(utils,SEND_RATE_MIN,GLOBAL_SCOPE,0,INT32,&rate_min);
  sdk.set_config(utils,SEND_RATE_MAX,GLOBAL_SCOPE,0,INT32,&rate_max);sdk.set_config(utils,NAGLE_TIME,GLOBAL_SCOPE,0,INT32,&nagle);
+ /* Read the limits back: world downloads crawl if Steam silently kept its small defaults. */
+ if(sdk.get_config){
+  int32_t now_buffer=-1,now_min=-1,now_max=-1;int type=0;size_t size=sizeof(int32_t);
+  sdk.get_config(utils,SEND_BUFFER,GLOBAL_SCOPE,0,&type,&now_buffer,&size);size=sizeof(int32_t);
+  sdk.get_config(utils,SEND_RATE_MIN,GLOBAL_SCOPE,0,&type,&now_min,&size);size=sizeof(int32_t);
+  sdk.get_config(utils,SEND_RATE_MAX,GLOBAL_SCOPE,0,&type,&now_max,&size);
+  char text[160];snprintf(text,sizeof(text),"Steam send limits: buffer %d KB, rate %d-%d KB/s%s",now_buffer/1024,now_min/1024,now_max/1024,now_max==rate_max?"":" (tuning was not applied)");report(text);
+ }else report("Steam send limits could not be verified");
 }
 static void phase(const char *text){if(strcmp(net_phase,text)!=0){net_phase=text;report(text);}}
 static void env(const char *key,char *out,size_t size){DWORD n=GetEnvironmentVariableA(key,out,(DWORD)size);if(!n||n>=size)out[0]=0;}
@@ -522,14 +532,38 @@ static void packet_log(bool incoming,uint64_t remote,int channel,unsigned kind,i
  if(!net_debug||channel<1||channel>2||packet_logs[incoming?1:0][channel]++>=8)return;
  char text[192];snprintf(text,sizeof(text),"network: game %s peer=%llu channel=%d kind=0x%02x bytes=%d result=%d",incoming?"receive":"send",(unsigned long long)remote,channel,kind,bytes,result);debug(text);
 }
+/* Join progress, so a slow or stuck world download shows up in the console instead of just "Joining". */
+static void track_send(uint64_t to,int channel,int bytes){
+ if(mode!=MODE_SERVER||channel!=2)return;
+ Peer *p=peer(to,false);if(!p||!p->authenticated)return;
+ ULONGLONG now=GetTickCount64();char text[192];
+ if(!p->first_sent){p->first_sent=now;p->next_report=4u<<20;snprintf(text,sizeof(text),"Sending the world to %s",p->name);report(text);}
+ p->sent+=(uint64_t)(bytes>0?bytes:0);
+ if(p->sent>=p->next_report){
+  snprintf(text,sizeof(text),"World transfer to %s: %.1f MB sent in %.0f s",p->name,(double)p->sent/1048576.0,(double)(now-p->first_sent)/1000.0);report(text);
+  while(p->next_report<=p->sent)p->next_report+=4u<<20;
+ }
+}
+/* Ordinary world messages only start once the client has the world and is in the game. */
+static void track_receive(uint64_t from,int channel,unsigned kind){
+ if(mode!=MODE_SERVER)return;
+ Peer *p=peer(from,false);if(!p||!p->authenticated)return;
+ ULONGLONG now=GetTickCount64();char text[192];
+ if(channel==2&&kind==0x14){
+  if(!p->asked){p->asked=now;p->wait_logged=now;snprintf(text,sizeof(text),"%s is joining: asked for the world",p->name);report(text);}
+  else if(!p->first_sent&&now-p->wait_logged>=15000){p->wait_logged=now;snprintf(text,sizeof(text),"%s has been waiting %.0f s for the world and nothing has been sent",p->name,(double)(now-p->asked)/1000.0);report(text);}
+ }else if(channel==1&&p->first_sent&&!p->entered){
+  p->entered=true;snprintf(text,sizeof(text),"%s entered the world (%.0f s after asking, %.1f MB sent)",p->name,(double)(now-p->asked)/1000.0,(double)p->sent/1048576.0);report(text);
+ }
+}
 static bool __cdecl send_bytes(Object *self,uint64_t to,Object *data,int bytes,int channel,bool reliable,const Method *info){
- unsigned kind=packet_kind(data);bool result=real_send_bytes(self,to,data,bytes,channel,reliable,info);packet_log(false,to,channel,kind,bytes,result);return result;
+ unsigned kind=packet_kind(data);bool result=real_send_bytes(self,to,data,bytes,channel,reliable,info);packet_log(false,to,channel,kind,bytes,result);if(result)track_send(to,channel,bytes);return result;
 }
 static void __cdecl receive_transfer(Object *self,uint64_t from,Object *data,const Method *info){
- packet_log(true,from,2,packet_kind(data),data?(int)il.array_length(data):0,true);real_receive_transfer(self,from,data,info);
+ packet_log(true,from,2,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,2,packet_kind(data));real_receive_transfer(self,from,data,info);
 }
 static void __cdecl receive_world(Object *self,uint64_t from,Object *data,const Method *info){
- packet_log(true,from,1,packet_kind(data),data?(int)il.array_length(data):0,true);real_receive_world(self,from,data,info);
+ packet_log(true,from,1,packet_kind(data),data?(int)il.array_length(data):0,true);track_receive(from,1,packet_kind(data));real_receive_world(self,from,data,info);
 }
 static void __cdecl steam_destroy(Object *self,const Method *info){MoonNet_Shutdown();uint8_t no=0;void *args[]={&no};call(game.set_initialized,NULL,args);real_steam_destroy(self,info);}
 
@@ -559,6 +593,7 @@ static bool load_apis(void){
  SDK(send,"SteamAPI_ISteamNetworkingMessages_SendMessageToUser");SDK(receive,"SteamAPI_ISteamNetworkingMessages_ReceiveMessagesOnChannel");SDK(accept,"SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser");SDK(close,"SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser");SDK(close_channel,"SteamAPI_ISteamNetworkingMessages_CloseChannelWithUser");SDK(session_info,"SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo");SDK(release,"SteamAPI_SteamNetworkingMessage_t_Release");SDK(user_id,"SteamAPI_ISteamUser_GetSteamID");SDK(auth_ticket,"SteamAPI_ISteamUser_GetAuthSessionTicket");SDK(cancel_ticket,"SteamAPI_ISteamUser_CancelAuthTicket");
 #undef SDK
  {FARPROC p=GetProcAddress(steam_module,"SteamAPI_ISteamNetworkingUtils_SetConfigValue");memcpy(&sdk.set_config,&p,sizeof(p));}
+ {FARPROC p=GetProcAddress(steam_module,"SteamAPI_ISteamNetworkingUtils_GetConfigValue");memcpy(&sdk.get_config,&p,sizeof(p));}
  size_t count=0;const void **assemblies=il.assemblies(il.domain(),&count);
  for(size_t i=0;i<count;i++){const void *image=il.image(assemblies[i]);if(strcmp(il.image_name(image),"com.rlabrecque.steamworks.net.dll")==0)steam_image=image;}
  return steam_image!=NULL;
