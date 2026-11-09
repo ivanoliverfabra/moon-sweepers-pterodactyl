@@ -613,7 +613,8 @@ static void watch_save(ULONGLONG now){
  char text[400];
  if(task_flag(task,"get_IsFaulted")||task_flag(task,"get_IsCanceled")){
   char detail[300]={0};const Method *get=method(il.object_class(task),"get_Exception",0);Object *error=get?il.invoke(get,task,NULL,&(Object *){NULL}):NULL;
-  if(error)il.exception(error,detail,sizeof(detail));for(char *c=detail;*c;c++)if((unsigned char)*c<32)*c=' ';
+  if(error)il.exception(error,detail,sizeof(detail));
+  for(char *c=detail;*c;c++)if((unsigned char)*c<32)*c=' ';
   snprintf(text,sizeof(text),"World save failed after %.1f s: %s",(double)(now-save_started)/1000.0,detail);report(text);
   il.gc_free(save_task);save_task=0;
  }else if(task_flag(task,"get_IsCompleted")){
