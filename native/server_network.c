@@ -193,17 +193,22 @@ static bool parse_port(const char *value,int *output){
 }
 static bool is_banned(uint64_t id){for(unsigned i=0;i<ban_count;i++)if(bans[i].id==id)return true;return false;}
 static void load_bans(void){
- if(!*ban_path)return;FILE *f=fopen(ban_path,"r");if(!f)return;char line[160];
+ if(!*ban_path)return;
+ FILE *f=fopen(ban_path,"r");if(!f)return;
+ char line[160];
  while(ban_count<MAX_BANS&&fgets(line,sizeof(line),f)){
   char *end=NULL;unsigned long long id=strtoull(line,&end,10);if(!id||end==line)continue;
-  while(*end==' '||*end=='\t')end++;end[strcspn(end,"\r\n")]=0;
+  while(*end==' '||*end=='\t')end++;
+  end[strcspn(end,"\r\n")]=0;
   bans[ban_count].id=id;snprintf(bans[ban_count].name,64,"%.63s",end);ban_count++;
  }
  fclose(f);
 }
 static void save_bans(void){
- if(!*ban_path)return;FILE *f=fopen(ban_path,"w");if(!f){report("Could not write the ban list");return;}
- for(unsigned i=0;i<ban_count;i++)fprintf(f,"%llu %s\n",(unsigned long long)bans[i].id,bans[i].name);fclose(f);
+ if(!*ban_path)return;
+ FILE *f=fopen(ban_path,"w");if(!f){report("Could not write the ban list");return;}
+ for(unsigned i=0;i<ban_count;i++)fprintf(f,"%llu %s\n",(unsigned long long)bans[i].id,bans[i].name);
+ fclose(f);
 }
 static void configure(void){
  if(configured)return;
@@ -603,14 +608,16 @@ bool MoonNet_Install(const void *image,void (*log_line)(const char *)){
 static bool text_matches(const char *name,const char *query,bool exact){
  size_t n=strlen(name),q=strlen(query);if(!q||q>n)return false;
  if(exact)return n==q&&_strnicmp(name,query,q)==0;
- for(size_t i=0;i+q<=n;i++)if(_strnicmp(name+i,query,q)==0)return true;return false;
+ for(size_t i=0;i+q<=n;i++)if(_strnicmp(name+i,query,q)==0)return true;
+ return false;
 }
 static Peer *find_peer(const char *query,bool *ambiguous){
  *ambiguous=false;uint64_t id=parse_id(query);
  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated&&id&&peers[i].id==id)return &peers[i];
  for(unsigned pass=0;pass<2;pass++){Peer *found=NULL;unsigned matches=0;
   for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated&&text_matches(peers[i].name,query,pass==0)){found=&peers[i];matches++;}
-  if(matches==1)return found;if(matches>1){*ambiguous=true;return NULL;}}
+  if(matches==1)return found;
+  if(matches>1){*ambiguous=true;return NULL;}}
  return NULL;
 }
 static void command_players(void){
@@ -650,7 +657,8 @@ bool MoonNet_Command(const char *verb,const char *arg){
  return true;
 }
 bool MoonNet_PlayerAt(unsigned index,uint64_t *id,char *name,size_t size){
- if(mode!=MODE_SERVER)return false;unsigned seen=0;
+ if(mode!=MODE_SERVER)return false;
+ unsigned seen=0;
  for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated){if(seen++==index){*id=peers[i].id;snprintf(name,size,"%s",peers[i].name);return true;}}
  return false;
 }
