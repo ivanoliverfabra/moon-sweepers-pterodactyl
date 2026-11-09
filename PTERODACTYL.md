@@ -67,7 +67,7 @@ Alternatively, run the installer directly from GitHub:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/ivanoliverfabra/moon-sweepers-pterodactyl/main/client/install-moon-client.ps1"))) -ServerId SERVER_ID -Launch
 ```
 
-The installer downloads the required client files from a release ZIP:
+The installer downloads the client module from this repository's latest GitHub release (built by the `release-client` workflow when a `v*` tag is pushed; pass `-Tag vX.Y.Z` to pin one):
 
 - `install-client.ps1`
 - `launch-client.ps1`

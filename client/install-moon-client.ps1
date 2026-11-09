@@ -4,11 +4,12 @@
   the files it needs.
 
 .DESCRIPTION
-  Upstream's install-client.ps1 only works from inside the unpacked release
-  because it reads native\out\version.dll and scripts\launch-client.ps1 next to
-  itself. This wrapper downloads the release ZIP, extracts just those files
-  (plus install-client.ps1), checks them against the SHA256SUMS manifest inside
-  the ZIP, runs upstream's installer, then deletes the download.
+  The installer script in the release only works from inside the unpacked
+  release because it reads native/out/version.dll and scripts/launch-client.ps1
+  next to itself. This wrapper downloads the release ZIP published by this
+  repository's release-client workflow, extracts just those files, checks them
+  against the SHA256SUMS manifest inside the ZIP, runs the installer, then
+  deletes the download. The ZIP holds the client module matching the server image.
 
   The installed launcher and desktop shortcut live in your game folder, so
   nothing from the download is needed afterwards.
@@ -29,9 +30,9 @@
 .PARAMETER ServerId
   Current server SteamID64 (17 digits), from the panel console's `status` command.
 .PARAMETER Action
-  Install (default), Launch, Shortcut or Uninstall; same meanings as upstream.
+  Install (default), Launch, Shortcut or Uninstall.
 .PARAMETER Tag
-  Upstream release tag to download. Must match the server image's upstream commit.
+  Release tag to download (for example v0.2.0). Empty (default) means the latest release.
 .PARAMETER ZipUrl
   Override the download URL (for a mirror or a different asset name).
 .PARAMETER ZipPath
@@ -46,7 +47,7 @@ param(
     [ValidateSet('Install', 'Launch', 'Shortcut', 'Uninstall')][string]$Action = 'Install',
     [switch]$Launch,
     [switch]$NoDesktopShortcut,
-    [string]$Tag = 'v0.1.0-alpha.2',
+    [string]$Tag = '',
     [string]$ZipUrl = '',
     [string]$ZipPath = '',
     [string]$ZipSha256 = '',
@@ -104,7 +105,8 @@ try {
         $zip = (Resolve-Path -LiteralPath $ZipPath).Path
     } else {
         if (-not $ZipUrl) {
-            $ZipUrl = "https://github.com/hexonMD/moon-sweepers-dedicated-server/releases/download/$Tag/moon-sweepers-dedicated-server.zip"
+            $release = if ($Tag) { "download/$Tag" } else { "latest/download" }
+            $ZipUrl = "https://github.com/ivanoliverfabra/moon-sweepers-pterodactyl/releases/$release/moon-sweepers-dedicated-server.zip"
         }
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $zip = Join-Path $work 'release.zip'
@@ -112,7 +114,7 @@ try {
         try {
             Invoke-WebRequest -Uri $ZipUrl -OutFile $zip -UseBasicParsing
         } catch {
-            throw "Download failed: $($_.Exception.Message)`nDownload the client/server ZIP from the upstream Releases page yourself and re-run with -ZipPath, or pass the correct -ZipUrl."
+            throw "Download failed: $($_.Exception.Message)`nDownload the client/server ZIP from the repository Releases page yourself and re-run with -ZipPath, or pass the correct -ZipUrl."
         }
     }
     $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
@@ -154,8 +156,8 @@ try {
     }
     Write-Output 'Extracted and verified: install-client.ps1, launch-client.ps1, version.dll'
 
-    # 4. Run upstream's installer from the extracted layout it expects.
-    # Upstream resolves its files from $PSScriptRoot and '..\native\out\version.dll'.
+    # 4. Run the installer from the extracted layout it expects.
+    # The installer resolves its files from $PSScriptRoot and '..\native\out\version.dll'.
     # On Windows both separators work; the Join-Path call there builds the backslash form.
     $installer = Join-Path $work 'scripts\install-client.ps1'
     if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
