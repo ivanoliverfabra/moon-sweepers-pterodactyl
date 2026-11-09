@@ -213,55 +213,83 @@ static void transition(const char *next) {if(strcmp(phase,next)!=0){phase=next;n
 static void request_quit(void) {
  if(quit_requested)return;
  quit_requested=true;transition(save_failed?"stopped-save-failed":"stopped");
- MoonNet_Shutdown();bool ok=true;call(methods.quit_game,NULL,NULL,&ok);
+ MoonNet_KickAll("Server is shutting down");MoonNet_Shutdown();bool ok=true;call(methods.quit_game,NULL,NULL,&ok);
 }
 static bool task_flag(Object *task,const char *name,bool *ok) {
  const Method *m=api.class_get_method_from_name(api.object_get_class(task),name,0);
  Object *result=call(m,task,NULL,ok);return result&&*(uint8_t *)api.object_unbox(result)!=0;
 }
-static const Method *dec_parse,*dec_subtract,*dec_text_method,*world_dev_add_money,*world_wallet;
+/* System.Decimal as IL2CPP lays it out in this build: flags (scale in bits 16-23,
+   sign in bit 31), then the 96-bit magnitude as hi, lo, mid. Arithmetic is done on
+   whole cents here, so no System.Decimal methods (some are stripped) are needed. */
+typedef struct {int32_t flags,hi,lo,mid;} Dec;
+typedef __int128 Cents;
+static const Method *world_dev_add_money,*world_wallet;
 static bool money_resolved,money_unavailable;
 static bool resolve_money(void) {
  if(money_resolved)return true;
  if(money_unavailable)return false;
- void *decimal=NULL;size_t count=0;const void **assemblies=api.domain_get_assemblies(api.domain_get(),&count);
- for(size_t i=0;i<count&&!decimal;i++)decimal=api.class_from_name(api.assembly_get_image(assemblies[i]),"System","Decimal");
- if(decimal){dec_parse=api.class_get_method_from_name(decimal,"Parse",1);dec_subtract=api.class_get_method_from_name(decimal,"Subtract",2);dec_text_method=api.class_get_method_from_name(decimal,"ToString",0);}
  world_dev_add_money=method("MoonWorld","DevAddMoney",2);world_wallet=method("MoonWorld","WalletDollars",1);
- if(!dec_parse||!dec_subtract||!dec_text_method||!world_dev_add_money||!world_wallet){money_unavailable=true;note("Money commands unavailable: required game or runtime methods were not found");return false;}
+ if(!world_dev_add_money||!world_wallet){
+  money_unavailable=true;
+  note(!world_dev_add_money?"Money commands unavailable: MoonWorld.DevAddMoney was not found":"Money commands unavailable: MoonWorld.WalletDollars was not found");
+  return false;
+ }
  money_resolved=true;return true;
 }
-static void decimal_text(Object *boxed,char *out,size_t size) {
- bool ok=true;out[0]=0;Object *text=boxed?call(dec_text_method,boxed,NULL,&ok):NULL;
- if(ok&&text)WideCharToMultiByte(CP_UTF8,0,api.string_chars(text),api.string_length(text),out,(int)size-1,NULL,NULL);
- if(!*out)snprintf(out,size,"?");
+static bool dec_cents(const Dec *d,Cents *out) {
+ unsigned scale=((uint32_t)d->flags>>16)&0xff;if(scale>28)return false;
+ unsigned __int128 magnitude=((unsigned __int128)(uint32_t)d->hi<<64)|((unsigned __int128)(uint32_t)d->mid<<32)|(uint32_t)d->lo;
+ while(scale>2){magnitude/=10;scale--;}
+ while(scale<2){magnitude*=10;scale++;}
+ *out=d->flags<0?-(Cents)magnitude:(Cents)magnitude;return true;
+}
+static Dec cents_dec(Cents cents) {
+ Dec d={0,0,0,0};unsigned __int128 magnitude=cents<0?(unsigned __int128)(-cents):(unsigned __int128)cents;
+ d.flags=(int32_t)((2u<<16)|(cents<0?0x80000000u:0u));
+ d.lo=(int32_t)(uint32_t)magnitude;d.mid=(int32_t)(uint32_t)(magnitude>>32);d.hi=(int32_t)(uint32_t)(magnitude>>64);
+ return d;
+}
+static void cents_text(Cents cents,char *out,size_t size) {
+ unsigned long long magnitude=(unsigned long long)(cents<0?-cents:cents);
+ snprintf(out,size,"%s%llu.%02llu",cents<0?"-":"",magnitude/100,magnitude%100);
 }
 /* Digits with an optional decimal part of at most two places; "-" only for addmoney. */
-static bool valid_amount(const char *text,bool allow_negative) {
- size_t i=0,digits=0,fraction=0;bool dot=false;
- if(text[0]=='-'){if(!allow_negative)return false;i++;}
+static bool parse_amount(const char *text,bool allow_negative,Cents *cents) {
+ size_t i=0,digits=0,fraction=0;bool dot=false;bool negative=false;unsigned long long whole=0,frac=0;
+ if(text[0]=='-'){if(!allow_negative)return false;negative=true;i++;}
  for(;text[i];i++){
   if(text[i]=='.'&&!dot){dot=true;continue;}
   if(text[i]<'0'||text[i]>'9')return false;
-  if(dot)fraction++;else digits++;
+  if(dot){fraction++;if(fraction<=2)frac=frac*10+(unsigned)(text[i]-'0');}
+  else {digits++;whole=whole*10+(unsigned)(text[i]-'0');}
+  if(digits>15||fraction>2)return false;
  }
- return digits>0&&digits<=15&&fraction<=2&&strlen(text)<=24;
+ if(!digits)return false;
+ while(fraction<2){frac*=10;fraction++;}
+ *cents=(Cents)(whole*100+frac);if(negative)*cents=-*cents;return true;
+}
+static bool wallet_cents(Object *world,Object *player,Cents *cents) {
+ bool ok=true;void *args[]={player};Object *boxed=call(world_wallet,world,args,&ok);
+ return ok&&boxed&&dec_cents((const Dec *)api.object_unbox(boxed),cents);
 }
 static void money_command(bool set,const char *arg,State q) {
  if(!q.bound||!initialized_world){note("Money command refused: the world is not ready");return;}
- if(!valid_amount(arg,!set)){note(set?"Usage: setmoney <dollars> (0 or more, up to 2 decimal places)":"Usage: addmoney <dollars> (negative to remove, up to 2 decimal places)");return;}
+ Cents amount;
+ if(!parse_amount(arg,!set,&amount)){note(set?"Usage: setmoney <dollars> (0 or more, up to 2 decimal places)":"Usage: addmoney <dollars> (negative to remove, up to 2 decimal places)");return;}
  if(!resolve_money())return;
- bool ok=true;Object *world=api.gchandle_get_target(initialized_world);if(!world){note("Money command refused: the world is not ready");return;}
+ Object *world=api.gchandle_get_target(initialized_world);if(!world){note("Money command refused: the world is not ready");return;}
  Object *player=api.string_new("server");
- void *parse_args[]={api.string_new(arg)};Object *amount=call(dec_parse,NULL,parse_args,&ok);if(!ok||!amount)return;
- void *wallet_args[]={player};Object *before=call(world_wallet,world,wallet_args,&ok);if(!ok||!before)return;
- Object *delta=amount;
- if(set){void *sub_args[]={api.object_unbox(amount),api.object_unbox(before)};delta=call(dec_subtract,NULL,sub_args,&ok);if(!ok||!delta)return;}
- dev_override=true;void *add_args[]={player,api.object_unbox(delta)};call(world_dev_add_money,world,add_args,&ok);dev_override=false;
+ Cents before;if(!wallet_cents(world,player,&before)){note("Money command failed: could not read the crew wallet");return;}
+ Cents delta=set?amount-before:amount;
+ char was[48],now_text[48],message[160];cents_text(before,was,sizeof(was));
+ if(delta==0){snprintf(message,sizeof(message),"Crew money is already %s",was);note(message);return;}
+ bool ok=true;Dec dd=cents_dec(delta);
+ dev_override=true;void *add_args[]={player,&dd};call(world_dev_add_money,world,add_args,&ok);dev_override=false;
  if(!ok)return;
- Object *after=call(world_wallet,world,wallet_args,&ok);
- char was[48],now_text[48],message[160];decimal_text(before,was,sizeof(was));decimal_text(after,now_text,sizeof(now_text));
- if(strcmp(was,now_text)==0&&strcmp(arg,"0")!=0&&strcmp(arg,"0.00")!=0&&!set)note("Crew money did not change: the game ignored the developer command");
+ Cents after;if(!wallet_cents(world,player,&after)){note("Money command sent, but the wallet could not be re-read");return;}
+ cents_text(after,now_text,sizeof(now_text));
+ if(after==before)note("Crew money did not change: the game ignored the developer command");
  else {snprintf(message,sizeof(message),"Crew money %s: %s -> %s",set?"set":"changed",was,now_text);note(message);}
 }
 static bool control_tick(State q,ULONGLONG now) {

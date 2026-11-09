@@ -55,7 +55,8 @@ SteamID64 from `players` if two names are alike):
 | `unban <player or SteamID64>` | Removes a ban. |
 | `addmoney <dollars>` | Adds to the crew's shared wallet (negative removes). Up to 2 decimal places. |
 | `setmoney <dollars>` | Sets the crew's shared wallet. |
-| `status`, `save`, `stop` | As before. |
+| `stop` | Runs a final world save, then disconnects every player ("Server is shutting down"), then exits. The panel's stop button does the same. |
+| `status`, `save` | Show server state / save the world now. |
 
 Money is one wallet shared by the whole crew. The commands use the game's own
 developer cheat path, so the host marks the amount as not earned for

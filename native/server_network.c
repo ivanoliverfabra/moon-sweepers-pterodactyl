@@ -708,6 +708,12 @@ static void tick_client(void){
  begin_client_join();
 }
 void MoonNet_Tick(void){if(!installed||shutdown_requested)return;if(mode==MODE_SERVER)tick_server();else if(mode==MODE_CLIENT)tick_client();}
+void MoonNet_KickAll(const char *reason){
+ if(mode!=MODE_SERVER||!server_started)return;
+ for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id&&peers[i].authenticated)drop_peer(&peers[i],reason);
+ /* Give the reject messages a moment to leave before the Steam connection is torn down. */
+ Sleep(750);
+}
 void MoonNet_Shutdown(void){
  shutdown_requested=true;
  if(mode==MODE_SERVER&&server_started){for(unsigned i=0;i<MAX_PEERS;i++)if(peers[i].id)sdk.end_auth(server_api,peers[i].id);sdk.shutdown();server_started=false;backend_ready=false;}

@@ -25,5 +25,7 @@ bool MoonNet_PlayerAt(unsigned index,uint64_t *id,char *name,size_t size);
    GameServer callback pump. Both modes need Tick on the Unity thread. */
 void MoonNet_Tick(void);
 void MoonNet_SetWorldReady(bool ready);
+/* Tells every authenticated player the server is closing and ends their sessions. */
+void MoonNet_KickAll(const char *reason);
 void MoonNet_Shutdown(void);
 #endif
