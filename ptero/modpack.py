@@ -62,7 +62,8 @@ def _fetch_pack(base, key, token):
     status, _headers, body = _get(base, f"/server/packs/{token}", key)
     if status == 401:
         raise RuntimeError("the API didn't accept the Server Key (MOON_SERVER_KEY)")
-    if status == 404:
+    # 404: no such pack or revision. 410: a revision that lists a mod its author has since deleted.
+    if status in (404, 410):
         try:
             reason = json.loads(body).get("message")
         except ValueError:
