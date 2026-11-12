@@ -42,7 +42,7 @@ static int64_t last_frame;
 static struct {unsigned frames,updates;double frame_ms,frame_max,world_ms,world_max;} window;
 static struct {double tps,frame_avg,frame_max,world_avg,world_max;} shown;
 static int queued_now,held_now;static uint64_t drained;
-static ULONGLONG window_start,calm_since,rate_changed,slow_since,next_warning;static bool behind;
+static ULONGLONG window_start,calm_since,rate_changed,slow_since,next_warning,world_since;static bool behind,world_seen;
 
 static void say(const char *text){if(logger)logger(text);}
 static double elapsed(int64_t from,int64_t to){return (double)(to-from)*1000.0/(double)frequency.QuadPart;}
@@ -80,7 +80,7 @@ static void sample(Object *world){
 static void __cdecl world_update(Object *self,const Method *info){
  int64_t start=counter();real_world_update(self,info);double ms=elapsed(start,counter());
  window.updates++;window.world_ms+=ms;if(ms>window.world_max)window.world_max=ms;
- sample(self);
+ sample(self);world_seen=true;
 }
 /* complete=true is the game's own save-time flush, which already drains everything. Otherwise keep calling the
    game's processor (each call is one ordinary 48-stroke, cleaningWorkBudgetMs pass) until the queue is empty, this
@@ -165,7 +165,10 @@ bool MoonTick_Govern(ULONGLONG now){
   double seconds=(double)(now-window_start)/1000.0;
   shown.tps=window.frames/seconds;shown.frame_avg=window.frames?window.frame_ms/window.frames:0;shown.frame_max=window.frame_max;
   shown.world_avg=window.updates?window.world_ms/window.updates:0;shown.world_max=window.world_max;
-  memset(&window,0,sizeof(window));window_start=now;judge(now);
+  memset(&window,0,sizeof(window));window_start=now;
+  /* Loading the world stalls frames for seconds; that is not falling behind. */
+  if(world_seen&&!world_since)world_since=now;
+  if(world_since&&now-world_since>=30000)judge(now);
  }
  int rate=rate_now;
  if(catchup&&queued_now>STROKES_A_FRAME){rate=max_rate;calm_since=0;}
