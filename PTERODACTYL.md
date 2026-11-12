@@ -77,10 +77,35 @@ SteamID64 from `players` if two names are alike):
 | `setmoney <dollars>` | Sets the crew's shared wallet. |
 | `stop` | Runs a final world save, then disconnects every player ("Server is shutting down"), then exits. The panel's stop button does the same. |
 | `status`, `save` | Show server state / save the world now. |
+| `perf` | Shows ticks per second, how long each tick and the world update take, and the cleaning backlog. |
 
 Money is one wallet shared by the whole crew. The commands use the game's own
 developer cheat path, so the host marks the amount as not earned for
 achievements, and the result is logged (`Crew money set: 100 -> 5000`).
+
+## Performance
+
+The server runs the game itself, and the game caps how much work it does per tick so a player's frame rate stays
+smooth: at most 48 cleaning strokes and a few milliseconds of cleaning per tick, 3 far-away robots per tick, 1 ms of
+dust syncing per tick. A server used to run those budgets at a fixed 30 ticks/s. Mods that add robots, machines or
+vehicles add work faster than that drains, so the server fell behind (dust cleaned late or not at all, robots and
+crewmates out of sync) even though most of the CPU sat idle.
+
+The server now runs its own tick:
+
+- **Catch-up.** While cleaning work is queued, it raises the tick rate to **Catch-up Tick Rate**
+  (`MOON_TICK_RATE_MAX`, default 120), so every per-tick budget runs more often, and it keeps cleaning past the
+  48-stroke cap within each tick's time. Five quiet seconds later it drops back to **Tick Rate** (`MOON_TICK_RATE`,
+  default 30).
+- **No GPU work.** Texture copies and shader passes, which only log errors on a server with no GPU, are skipped. The
+  game asked for one of those for every cleaned patch of ground.
+- **Visible.** `perf` in the console and `tick` in `GET /` report ticks per second, tick and world-update time, and
+  the backlog. When the server can't keep up for 10 seconds (it reaches under 75% of its target, or the cleaning queue
+  nears the game's limit of 4096 strokes, after which new strokes are dropped), the console says so, once a minute,
+  and says again when it has caught up.
+
+If it still falls behind at the catch-up rate, the CPU is the limit: give the server a faster core (the game runs
+on one), or remove the mod that adds the most work. `MOON_CATCHUP=0` turns catch-up off for comparison.
 
 ## Logs
 

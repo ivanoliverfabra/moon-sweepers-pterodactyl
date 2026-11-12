@@ -149,6 +149,26 @@
       "field_type": "text"
     },
     {
+      "name": "Tick Rate",
+      "description": "Ticks per second the server runs at while the world is quiet (10-240). The game does a fixed amount of work per tick, so this is also how fast robots, machines and dust syncing are served at rest.",
+      "env_variable": "MOON_TICK_RATE",
+      "default_value": "30",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:10|max:240",
+      "field_type": "text"
+    },
+    {
+      "name": "Catch-up Tick Rate",
+      "description": "Ticks per second the server may go up to while it has a cleaning backlog, e.g. from mods that add robots or machines (Tick Rate-240). Type perf in the console to see what it reaches.",
+      "env_variable": "MOON_TICK_RATE_MAX",
+      "default_value": "120",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:10|max:240",
+      "field_type": "text"
+    },
+    {
       "name": "Network Debug Log",
       "description": "1 adds low-level Steam transport and packet lines to the console log. Leave 0 for the normal player join/leave log.",
       "env_variable": "MOON_NET_DEBUG",

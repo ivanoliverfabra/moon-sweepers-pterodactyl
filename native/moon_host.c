@@ -11,6 +11,7 @@
 #include "proxy_exports.h"
 #include "headless_graphics.h"
 #include "server_network.h"
+#include "server_tick.h"
 
 typedef const void Method;
 typedef void Object;
@@ -112,6 +113,7 @@ static void write_state(State q) {
   for(unsigned i=0;MoonNet_PlayerAt(i,&id,name,sizeof(name));i++){if(i)fputc(',',f);fprintf(f,"{\"id\":\"%llu\",\"name\":",(unsigned long long)id);json_string(f,name);fputc('}',f);}
   fputc(']',f);
  }
+ MoonTick_WriteJson(f);
  fputs("}\n",f);fclose(f);
  MoveFileExA(temp,state_path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
 }
@@ -313,7 +315,7 @@ static bool control_tick(State q,ULONGLONG now) {
    }
   }else if(strcmp(command,"addmoney")==0||strcmp(command,"setmoney")==0){
    if(MoonNet_IsClient())note("Money command ignored by player client");else money_command(command[0]=='s',argument,q);
-  }else if(!MoonNet_IsClient()&&MoonNet_Command(command,argument)){
+  }else if(!MoonNet_IsClient()&&(MoonNet_Command(command,argument)||MoonTick_Command(command))){
   }else note("Unknown host command ignored");
  }}
  if(save_task){
@@ -334,7 +336,7 @@ static void host_tick(void) {
  static bool direct_load;
  ULONGLONG now=GetTickCount64();if(now<next_tick)return;next_tick=now+250;
  if(InterlockedCompareExchange(&tick_busy,1,0)!=0)return;
- if(headless)moon_headless_frame_limit();
+ if(headless&&!MoonTick_Govern(now))moon_headless_frame_limit();
  bool ok=true;State q=read_state(&ok);
  MoonNet_SetWorldReady(ok&&q.game&&!q.loading&&q.bound);
  if(control_tick(q,now)){InterlockedExchange(&tick_busy,0);return;}
@@ -364,7 +366,7 @@ static void host_tick(void) {
  else if(deadline&&now>deadline&&(!q.game||q.loading)) {transition("startup-timeout");}
  write_state(q);InterlockedExchange(&tick_busy,0);
 }
-static void __cdecl update_hook(Object *self,const Method *info) {if(!MoonNet_IsDedicated())original_update(self,info);if(installed){MoonNet_Tick();host_tick();}}
+static void __cdecl update_hook(Object *self,const Method *info) {if(!MoonNet_IsDedicated())original_update(self,info);if(installed){MoonTick_Frame();MoonNet_Tick();host_tick();}}
 static void __cdecl world_initialize_hook(Object *self,const Method *info) {
  original_world_initialize(self,info);
  Object *progress=NULL,*regions=NULL;
@@ -409,6 +411,7 @@ static bool install_game_hooks(void) {
  if(success)success=(!headless||moon_install_headless_graphics(game_module,note))&&add_hook("MoonNewHire","SignedFor",1,signed_hook,(void **)&original_signed)&&add_hook("MoonLoadingScreen","Show",2,show_hook,(void **)&original_show);
  if(success)success=add_hook("MoonSteam","Update",0,update_hook,(void **)&original_update);
  if(success)success=add_hook("MoonWorld","Initialize",0,world_initialize_hook,(void **)&original_world_initialize);
+ if(success&&MoonNet_IsDedicated()&&headless&&!MoonTick_Install(game_module,game_image,note))note("Server tick unavailable: running at a fixed 30 ticks/s");
  if(success&&MoonNet_IsDedicated()&&!add_hook("MoonDevTools","get_Enabled",0,dev_enabled_hook,(void **)&original_dev_enabled))note("Money commands will not work: MoonDevTools.Enabled could not be hooked");
  if(success){InterlockedExchange(&installed,1);transition("waiting-steam");note("Game hooks installed; ordinary Steam callbacks remain active");}
  else {InterlockedExchange(&install_failed,1);transition("hook-error");write_state((State){0});}

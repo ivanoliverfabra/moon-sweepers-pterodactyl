@@ -22,7 +22,7 @@ SYNC_GAME = "/opt/moon/ptero/sync-game.py"
 STATE_PATH = Path("/data/logs/moon-host-state.json")
 COMMAND_PATH = Path("/data/control/command")
 # Commands the game host handles itself (see native/moon_host.c control_tick).
-HOST_COMMANDS = {"addmoney", "setmoney", "players", "kick", "ban", "unban"}
+HOST_COMMANDS = {"addmoney", "setmoney", "players", "kick", "ban", "unban", "perf"}
 # The runner rewrites the state file on every game heartbeat, so a stale
 # heartbeat means the host process is wedged even though the file still exists.
 HEARTBEAT_FRESH_SECONDS = 15
@@ -303,7 +303,7 @@ def console():
                 send_host_command(f"{verb} {argument}".strip())
         elif command in ("", "help"):
             print("Console commands: status, save, stop, players, kick <player>, ban <player>, "
-                  "unban <player>, addmoney <amount>, setmoney <amount>, mods, mod help, help", flush=True)
+                  "unban <player>, addmoney <amount>, setmoney <amount>, perf, mods, mod help, help", flush=True)
         elif command in ("status", "save"):
             run_control(command)
         elif command == "mods":
@@ -372,7 +372,7 @@ def main():
     if code:
         return code
 
-    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, mods, mod, help", flush=True)
+    print("Moon Sweepers server starting. Console commands: status, save, stop, players, kick, ban, unban, addmoney, setmoney, perf, mods, mod, help", flush=True)
     child = subprocess.Popen([ENTRYPOINT, "run"], cwd="/home/container", env=os.environ.copy())
     threading.Thread(target=console, daemon=True).start()
     code = child.wait()

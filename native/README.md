@@ -44,6 +44,17 @@ The adapter tunes Steam networking globally at start-up: the server gets the sam
 4 MB send buffer and 1-8 MB/s send rate the game sets on clients, Nagle disabled,
 and both sides allow 20 s (instead of 10 s) for the initial relay handshake.
 
+The dedicated headless server runs its own tick (`server_tick.c`). The game budgets its work per frame for a client
+that must keep drawing (48 cleaning strokes and `MoonSettings.cleaningWorkBudgetMs` per frame, 3 far robots per frame,
+1 ms of dust serving per frame), and the server used to run those budgets at a fixed 30 frames/s. Now, while
+`MoonWorld`'s stroke queue holds more than a frame's work, the server raises `Application.targetFrameRate` from
+`MOON_TICK_RATE` (default 30) to `MOON_TICK_RATE_MAX` (default 120) and calls the game's `ProcessToolStrokes` again
+within the frame until the queue is empty, 40% of the frame's time is spent, or a pass makes no progress. It returns
+to the base rate after 5 quiet seconds. `Graphics.CopyTexture` and `Material.SetPass` become no-ops, since without a
+GPU they only log errors with stack traces. The state JSON's `tick` object and the `perf` command report ticks per
+second, frame and `MoonWorld.Update` times, and the backlog; the log says when the server falls behind and when it
+catches up. `MOON_CATCHUP=0` keeps the fixed rate.
+
 The host defaults to save slot 1; `MOON_SLOT` or `-moon-slot` selects 1-5.
 The ordinary game save directory is retained within the persistent Wine prefix.
 The module reports a world ready only after CPU initialization has completed and
